@@ -1,2 +1,8 @@
 .DS_Store
 .idea/
+test_assets/
+wasm/build_wasm/
+__pycache__/
+*.pyc
+.venv/
+wasm/.venv/

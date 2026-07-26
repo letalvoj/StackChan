@@ -1,0 +1,31 @@
+# === ESP-IDF Build Outputs ===
+# Compiled firmware binaries, object files, cmake cache
+**/build/
+
+# === ESP-IDF Managed Components ===
+# Auto-downloaded by `idf.py` from component registry — fully reproducible
+**/managed_components/
+
+# === Emscripten / WASM Build Outputs ===
+wasm/build_wasm/
+
+# === Python Ephemera ===
+**/__pycache__/
+**/*.pyc
+**/.venv/
+
+# === OS / IDE Junk ===
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/.cache/
+**/.clangd/
+**/.devcontainer/
+
+# === ESP-IDF Config Leftovers ===
+**/sdkconfig.old
+**/sdkconfig
+**/dependencies.lock
+
+# === Test Assets (wav files, reproducible) ===
+test_assets/
