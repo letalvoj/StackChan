@@ -3,37 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>StackChan WASM Emulator — Phase 1 & BLE Provisioning Gateway</title>
-<style>
-  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
-  .container { max-width: 1140px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 24px; }
-  .header { font-size: 22px; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 12px; }
-  .deck-wrap { display: grid; grid-template-columns: repeat(3, 350px); justify-content: center; align-items: start; gap: 20px; width: 100%; }
-  .deck-column { display: flex; flex-direction: column; gap: 20px; width: 350px; }
-  .robot-frame { background: #1e293b; padding: 18px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 2px solid #334155; width: 100%; box-sizing: border-box; }
-  .radar-frame { border: 2px solid #00ff66 !important; box-shadow: 0 0 20px rgba(0,255,102,0.15) !important; background: #02180a !important; }
-  .ble-frame { border: 2px solid #38bdf8 !important; box-shadow: 0 0 20px rgba(56,189,248,0.15) !important; background: #081b2e !important; }
-  .frame-title { font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; }
-  canvas#display { width: 280px; height: 210px; background: #000; border-radius: 12px; cursor: pointer; display: block; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
-  canvas#radar { width: 280px; height: 210px; background: #010e05; border-radius: 12px; display: block; margin: 0 auto; box-shadow: inset 0 0 16px rgba(0,255,102,0.2); border: 1px solid #005522; }
-  .ble-controls { display: flex; flex-direction: column; gap: 10px; }
-  .ble-btn { padding: 10px; border-radius: 8px; border: none; font-weight: 600; font-size: 13px; cursor: pointer; transition: transform 0.1s, opacity 0.2s; }
-  .ble-btn:hover { opacity: 0.9; transform: translateY(-1px); }
-  .btn-webbt { background: #38bdf8; color: #0f172a; }
-  .btn-handshake { background: #facc15; color: #0f172a; }
-  .btn-wifi { background: #4ade80; color: #0f172a; }
-  .btn-status { background: #818cf8; color: #ffffff; }
-  .wifi-form { display: flex; flex-direction: column; gap: 6px; }
-  .led-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px; background: #0b0f19; border-radius: 8px; border: 1px solid #1e293b; }
-  .led-pixel { width: 10px; height: 17px; border-radius: 3px; background: #1e293b; box-shadow: 0 0 4px rgba(0,0,0,0.5); transition: all 0.15s ease; }
-  .wifi-form input { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px; color: #e2e8f0; font-size: 12px; }
-  .ble-status-box { margin-top: 12px; background: #0f172a; border-radius: 8px; border: 1px dashed #38bdf8; padding: 10px; font-size: 11px; font-family: monospace; color: #7dd3fc; word-break: break-all; }
-  .log-pane { width: 100%; background: #1e293b; border-radius: 16px; border: 2px solid #334155; padding: 16px; font-family: monospace; font-size: 12px; height: 340px; overflow-y: auto; color: #94a3b8; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
-  .log-entry { margin: 4px 0; border-bottom: 1px solid #0f172a; padding-bottom: 2px; }
-  .log-info { color: #38bdf8; }
-  .log-radar { color: #00ff66; font-weight: 600; }
-  .log-servo { color: #facc15; }
-  .log-ble { color: #38bdf8; font-weight: 700; }
-</style>
+<link rel="stylesheet" href="ui/shell.css">
+<script src="https://unpkg.com/petite-vue@0.4.1/dist/petite-vue.iife.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
 </head>
@@ -59,7 +30,7 @@
             🔵 <b>Echo/Respond</b> → play back audio → execute actions → <b>auto-return to Listen</b><br/>
             Tap again while listening to stop the loop.
           </div>
-          <div class="ble-status-box" id="proto-status-box">WasmProtocol Status: Disconnected (Tap screen canvas to start assistant)</div>
+          <div class="ble-status-box">{{ store.protoStatus }}</div>
         </div>
       </div>
 
@@ -74,15 +45,15 @@
           <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;color:#94a3b8;margin-top:8px;">
             <div>
               <span style="color:#64748b;display:inline-block;width:110px;">Device-Id (MAC):</span>
-              <strong id="auth-device-mac" style="color:#22d3ee;font-family:monospace;">Loading...</strong>
+              <strong style="color:#22d3ee;font-family:monospace;">{{ store.deviceMac }}</strong>
             </div>
             <div>
               <span style="color:#64748b;display:inline-block;width:110px;">Client-Id (UUID):</span>
-              <strong id="auth-client-uuid" style="color:#a855f7;font-family:monospace;word-break:break-all;">Loading...</strong>
+              <strong style="color:#a855f7;font-family:monospace;word-break:break-all;">{{ store.clientUuid }}</strong>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
               <span style="color:#64748b;display:inline-block;width:110px;">Auth Token:</span>
-              <input id="auth-token-input" type="text" value="dev_token_8081" style="flex:1;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:12px;" onchange="updateAuthToken(this.value)" onkeyup="updateAuthToken(this.value)" />
+              <input type="text" v-model="store.authToken" style="flex:1;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:12px;" @change="store.onAuthTokenChange()" @keyup="store.onAuthTokenChange()" />
             </div>
           </div>
         </div>
@@ -98,13 +69,13 @@
             <button class="ble-btn btn-webbt" onclick="requestWebBluetooth()">🔵 Pair Physical ESP32 via Web Bluetooth</button>
             <button class="ble-btn btn-handshake" onclick="sendBleHandshake()">🤝 1. Send Phone Handshake</button>
             <div class="wifi-form">
-              <input id="wifi-ssid" type="text" placeholder="Wi-Fi SSID" value="StackChan_World_AP" />
-              <input id="wifi-pass" type="password" placeholder="Password" value="stackchan2026" />
+              <input type="text" placeholder="Wi-Fi SSID" v-model="store.wifiSsid" />
+              <input type="password" placeholder="Password" v-model="store.wifiPass" />
               <button class="ble-btn btn-wifi" onclick="sendBleWifi()">📶 2. Provision Wi-Fi Credentials over BLE</button>
             </div>
             <button class="ble-btn btn-status" onclick="sendBleStatus()">🔍 Query BLE Provisioning Status</button>
           </div>
-          <div class="ble-status-box" id="ble-status-box">BLE GATT Server Ready | Service: e2e5e5e0-1234-5678-1234-56789abcdef0</div>
+          <div class="ble-status-box">{{ store.bleStatus }}</div>
         </div>
         <div class="log-pane" id="log-pane" style="margin-top: 15px;">
           <div class="log-entry">🟢 [System] HTML UI Shell loaded. Awaiting WebAssembly boot...</div>
@@ -118,42 +89,42 @@
       <canvas id="vad-chart" width="1024" height="240" style="background:#020617;border-radius:8px;border:1px solid #1e293b;width:100%;display:block;"></canvas>
       <div style="display:flex;gap:16px;align-items:center;margin-top:10px;flex-wrap:wrap;">
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Minimum acoustic RMS volume floor required before permitting neural speech trigger (default: 0.004). Lower values increase sensitivity to faint voice; set to 0.000 to disable volume gating entirely.">🔴 VAD Volume Floor:
-          <input type="range" id="vad-threshold-slider" min="0.000" max="0.150" step="0.001" value="0.004" style="width:120px;vertical-align:middle;" oninput="updateVadThreshold(this.value)">
-          <span id="vad-threshold-display" style="color:#f43f5e;font-weight:700;">0.004</span>
+          <input type="range" v-model.number="store.vadThreshold" min="0.000" max="0.150" step="0.001" style="width:120px;vertical-align:middle;">
+          <span style="color:#f43f5e;font-weight:700;">{{ store.vadThreshold.toFixed(3) }}</span>
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Adjust oscilloscope vertical rendering maximum height amplitude (default: 0.15).">📏 Chart Y-Max:
-          <input type="range" id="vad-yscale-slider" min="0.02" max="0.5" step="0.01" value="0.15" style="width:100px;vertical-align:middle;" oninput="updateYScale(this.value)">
-          <span id="vad-yscale-display" style="color:#38bdf8;font-weight:700;">0.15</span>
+          <input type="range" v-model.number="store.chartYMax" min="0.02" max="0.5" step="0.01" style="width:100px;vertical-align:middle;">
+          <span style="color:#38bdf8;font-weight:700;">{{ store.chartYMax.toFixed(2) }}</span>
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Microphone input pre-amplification gain multiplier (default: 1.0x). Increase if microphone volume is too quiet.">🔊 Preamp Gain:
-          <input type="range" id="vad-preamp-slider" min="0.5" max="5.0" step="0.1" value="1.0" style="width:100px;vertical-align:middle;" oninput="updatePreamp(this.value)">
-          <span id="vad-preamp-display" style="color:#22c55e;font-weight:700;">1.0x</span>
+          <input type="range" v-model.number="store.preampGain" min="0.5" max="5.0" step="0.1" style="width:100px;vertical-align:middle;" @input="store.onPreampInput()">
+          <span style="color:#22c55e;font-weight:700;">{{ store.preampGain.toFixed(1) }}x</span>
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Invert conversational phase semantics (Server audio loopback stress testing mode).">⏳ Tenet Invert:
-          <input type="checkbox" id="tenet-checkbox" style="vertical-align:middle;" onchange="_tenetMode = this.checked; sendServerConfig();">
+          <input type="checkbox" v-model="store.tenetMode" style="vertical-align:middle;" @change="store.onServerConfigChange()">
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Maximum server-side recording duration ceiling (default: 45s). When hit, server automatically closes turn and responds. Set to 0 for unlimited.">⌛ Server Cap:
-          <input type="range" id="server-cap-slider" min="0" max="300" step="5" value="45" style="width:90px;vertical-align:middle;" oninput="updateServerCap(this.value)">
-          <span id="server-cap-display" style="color:#eab308;font-weight:700;">45s</span>
+          <input type="range" v-model.number="store.serverCap" min="0" max="300" step="5" style="width:90px;vertical-align:middle;" @change="store.onServerConfigChange()">
+          <span style="color:#eab308;font-weight:700;">{{ store.serverCapText }}</span>
         </label>
       </div>
       <div style="display:flex;gap:16px;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed #1e293b;flex-wrap:wrap;">
         <span style="font-size:12px;color:#cbd5e1;font-weight:700;">🧠 Silero Neural Hyperparameters:</span>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Silero neural network confidence probability required to declare speech start (default: 0.50). Increase to reject ambiguous noise or background conversations.">🟢 Speech Onset (Pos):
-          <input type="range" id="vad-pos-slider" min="0.10" max="0.95" step="0.01" value="0.50" style="width:90px;vertical-align:middle;" oninput="updateVadHyperParams()">
-          <span id="vad-pos-display" style="color:#22c55e;font-weight:700;">0.50</span>
+          <input type="range" v-model.number="store.vadPos" min="0.10" max="0.95" step="0.01" style="width:90px;vertical-align:middle;" @input="store.onVadHyperParamsInput()">
+          <span style="color:#22c55e;font-weight:700;">{{ store.vadPos.toFixed(2) }}</span>
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Silero neural network confidence floor required to declare speech end (default: 0.35). Provides hysteresis to bridge natural mid-sentence breathing pauses.">🔴 Silence Drop (Neg):
-          <input type="range" id="vad-neg-slider" min="0.05" max="0.80" step="0.01" value="0.35" style="width:90px;vertical-align:middle;" oninput="updateVadHyperParams()">
-          <span id="vad-neg-display" style="color:#f43f5e;font-weight:700;">0.35</span>
+          <input type="range" v-model.number="store.vadNeg" min="0.05" max="0.80" step="0.01" style="width:90px;vertical-align:middle;" @input="store.onVadHyperParamsInput()">
+          <span style="color:#f43f5e;font-weight:700;">{{ store.vadNeg.toFixed(2) }}</span>
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Minimum consecutive speech frames (60ms each) required before triggering onset (default: 3 frames / ~180ms). Higher values reject brief sounds like clicks or coughs.">⏱️ Min Speech Duration:
-          <input type="range" id="vad-min-slider" min="1" max="15" step="1" value="3" style="width:80px;vertical-align:middle;" oninput="updateVadHyperParams()">
-          <span id="vad-min-display" style="color:#38bdf8;font-weight:700;">3</span> f (~180ms)
+          <input type="range" v-model.number="store.vadMin" min="1" max="15" step="1" style="width:80px;vertical-align:middle;" @input="store.onVadHyperParamsInput()">
+          <span style="color:#38bdf8;font-weight:700;">{{ store.vadMin }}</span> f (~180ms)
         </label>
         <label style="font-size:12px;color:#94a3b8;white-space:nowrap;" title="Silence frame count allowed before closing speech turn (default: 8 frames / ~480ms). Prevents chopping utterances during natural word spacing.">🛡️ Hysteresis (Redemption):
-          <input type="range" id="vad-redemption-slider" min="2" max="20" step="1" value="8" style="width:80px;vertical-align:middle;" oninput="updateVadHyperParams()">
-          <span id="vad-redemption-display" style="color:#a855f7;font-weight:700;">8</span> f (~480ms)
+          <input type="range" v-model.number="store.vadRedemption" min="2" max="20" step="1" style="width:80px;vertical-align:middle;" @input="store.onVadHyperParamsInput()">
+          <span style="color:#a855f7;font-weight:700;">{{ store.vadRedemption }}</span> f (~480ms)
         </label>
       </div>
     </div>
@@ -165,11 +136,11 @@
         <!-- State Panel -->
         <div style="flex:0 0 280px;">
           <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Server State</div>
-          <div id="debug-state" style="font-family:monospace;font-size:13px;color:#22c55e;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;min-height:80px;">
-            Phase: <span id="dbg-phase">—</span><br/>
-            Buffered: <span id="dbg-buffered">0.00</span>s (<span id="dbg-chunks">0</span> chunks)<br/>
-            Tenet: <span id="dbg-tenet">OFF</span><br/>
-            Progress: <span id="dbg-progress">—</span>
+          <div style="font-family:monospace;font-size:13px;color:#22c55e;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;min-height:80px;">
+            Phase: <span>{{ store.dbgPhase }}</span><br/>
+            Buffered: <span>{{ store.dbgBuffered }}</span>s (<span>{{ store.dbgChunks }}</span> chunks)<br/>
+            Tenet: <span>{{ store.dbgTenet }}</span><br/>
+            Progress: <span>{{ store.dbgProgress }}</span>
           </div>
         </div>
         <!-- Log Panel -->
@@ -180,1100 +151,99 @@
       </div>
     </div>
   </div>
-  <script>
-    var logPane = document.getElementById('log-pane');
-    function appendLog(msg) {
-      var div = document.createElement('div');
-      var cls = 'log-entry ';
-      if (msg.indexOf('[RADAR]') !== -1) cls += 'log-radar';
-      else if (msg.indexOf('[WASM_SERVO]') !== -1) cls += 'log-servo';
-      else if (msg.indexOf('[WASM_BLE]') !== -1 || msg.indexOf('[WEB_BT]') !== -1) cls += 'log-ble';
-      else if (msg.indexOf('[INFO]') !== -1 || msg.indexOf('[WASM_') !== -1 || msg.indexOf('info') !== -1) cls += 'log-info';
-      div.className = cls;
-      div.textContent = new Date().toISOString().split('T')[1].slice(0, 8) + ' ' + msg;
-      logPane.appendChild(div);
-      logPane.scrollTop = logPane.scrollHeight;
-    }
-    var originalLog = console.log;
-    console.log = function() {
-      originalLog.apply(console, arguments);
-      appendLog(Array.from(arguments).join(' '));
-    };
-    var originalError = console.error;
-    console.error = function() {
-      originalError.apply(console, arguments);
-      appendLog('[ERROR] ' + Array.from(arguments).join(' '));
-    };
 
-    // Touch input state for HAL bridge
-    var Module = {
-      canvas: (function() { return document.getElementById('display'); })(),
-      _touchState: { x: 0, y: 0, pressed: false }
-    };
-    window._onFirmwareStateChanged = function(stateStr) {
-      if (typeof _assistantState !== 'undefined') {
-        _assistantState = (stateStr === 'listening' || stateStr === 'speaking') ? stateStr : 'idle';
-        console.log('[WASM_APP] UI State updated by authoritative firmware transition -> ' + stateStr + ' (mapped: ' + _assistantState + ')');
-      }
-    };
-    Module.onAudioVoiceProcessing = function(enabled) {
-      var isEnabled = (enabled === true || enabled === 1 || enabled === "1");
-      console.log('[WASM_APP] onAudioVoiceProcessing gate set -> ' + (isEnabled ? 'ENABLED (1)' : 'DISABLED (0)'));
-      if (isEnabled) {
-        if (typeof ensureAudioContextActive === 'function') ensureAudioContextActive();
-        if (typeof _isAssistantLoopActive !== 'undefined') {
-          if (!_isAssistantLoopActive) {
-            _isAssistantLoopActive = true;
-            _turnCount = 0;
-            _isScreenMicRecording = true;
-            _recordedPcm = [];
-            if (window._wasmProtocolWs && window._wasmProtocolWs.readyState === 1 && typeof _tenetMode !== 'undefined') {
-              window._wasmProtocolWs.send(JSON.stringify({type: 'config', tenet: _tenetMode}));
-            }
-            console.log('[WASM_VAD] 🟢 Assistant audio loop ACTIVATED via authoritative C++ HAL state.');
-          }
-          _isScreenMicRecording = true;
-        }
-      } else {
-        if (typeof _isScreenMicRecording !== 'undefined') _isScreenMicRecording = false;
-      }
-      if (window._sileroVad) {
-        if (isEnabled) {
-          if (typeof _vadSpeechState !== 'undefined') _vadSpeechState = 0;
-          window._sileroVad.start();
-          console.log('[WASM_VAD:LIFECYCLE] ▶️ Silero ONNX MicVAD active (Voice processing resumed).');
-        } else {
-          window._sileroVad.pause();
-          if (typeof _vadSpeechState !== 'undefined') _vadSpeechState = 0;
-          console.log('[WASM_VAD:LIFECYCLE] ⏸️ Silero ONNX MicVAD paused (Voice processing suspended).');
-        }
-      }
-    };
+  <script>
+    var Module = window.Module || {};
+    Module.canvas = (function() { return document.getElementById('display'); })();
+    Module._touchState = { x: 0, y: 0, pressed: false };
+    window.Module = Module;
+
     var cvs = document.getElementById('display');
     function updateTouchCoords(clientX, clientY) {
+      if (!cvs) return;
       var rect = cvs.getBoundingClientRect();
       Module._touchState.x = Math.max(0, Math.min(319, Math.round((clientX - rect.left) * (320 / rect.width))));
       Module._touchState.y = Math.max(0, Math.min(239, Math.round((clientY - rect.top) * (240 / rect.height))));
     }
-    cvs.addEventListener('mousedown', function(e) {
-      if (typeof ensureAudioContextActive === 'function') ensureAudioContextActive();
-      updateTouchCoords(e.clientX, e.clientY);
-      Module._touchState.pressed = true;
-    });
+    if (cvs) {
+      cvs.addEventListener('mousedown', function(e) {
+        if (typeof window.ensureAudioContextActive === 'function') window.ensureAudioContextActive();
+        updateTouchCoords(e.clientX, e.clientY);
+        Module._touchState.pressed = true;
+      });
+      cvs.addEventListener('touchstart', function(e) {
+        if (typeof window.ensureAudioContextActive === 'function') window.ensureAudioContextActive();
+        if (e.touches.length > 0) {
+          updateTouchCoords(e.touches[0].clientX, e.touches[0].clientY);
+          Module._touchState.pressed = true;
+          e.preventDefault();
+        }
+      }, { passive: false });
+      cvs.addEventListener('touchmove', function(e) {
+        if (Module._touchState.pressed && e.touches.length > 0) {
+          updateTouchCoords(e.touches[0].clientX, e.touches[0].clientY);
+          e.preventDefault();
+        }
+      }, { passive: false });
+    }
     window.addEventListener('mousemove', function(e) {
       if (Module._touchState.pressed) {
         updateTouchCoords(e.clientX, e.clientY);
       }
     });
-    window.addEventListener('mouseup', function(e) { Module._touchState.pressed = false; });
+    window.addEventListener('mouseup', function() { Module._touchState.pressed = false; });
+    window.addEventListener('touchend', function() { Module._touchState.pressed = false; });
+    window.addEventListener('touchcancel', function() { Module._touchState.pressed = false; });
+    window.addEventListener('click', function() {
+      if (window._vadAudioCtx && window._vadAudioCtx.state === 'suspended') window._vadAudioCtx.resume();
+    });
+    document.body.addEventListener('mousedown', function() {
+      if (typeof window.ensureAudioContextActive === 'function') window.ensureAudioContextActive();
+    }, { once: true });
 
-    cvs.addEventListener('touchstart', function(e) {
-      if (typeof ensureAudioContextActive === 'function') ensureAudioContextActive();
-      if (e.touches.length > 0) {
-        updateTouchCoords(e.touches[0].clientX, e.touches[0].clientY);
-        Module._touchState.pressed = true;
-        e.preventDefault();
-      }
-    }, { passive: false });
-    cvs.addEventListener('touchmove', function(e) {
-      if (Module._touchState.pressed && e.touches.length > 0) {
-        updateTouchCoords(e.touches[0].clientX, e.touches[0].clientY);
-        e.preventDefault();
-      }
-    }, { passive: false });
-    window.addEventListener('touchend', function(e) { Module._touchState.pressed = false; });
-    window.addEventListener('touchcancel', function(e) { Module._touchState.pressed = false; });
-
-    // Comic Book Half-Dome Radar Rendering Engine
-    var radarCvs = document.getElementById('radar');
-    var radarCtx = radarCvs ? radarCvs.getContext('2d') : null;
-    var lastRadarLogYaw = null, lastRadarLogPitch = null;
-
-    Module.updateServoRadar = function(yaw, pitch) {
-      if (!radarCtx) return;
-      var w = radarCvs.width, h = radarCvs.height;
-      
-      radarCtx.fillStyle = '#010e05';
-      radarCtx.fillRect(0, 0, w, h);
-
-      radarCtx.fillStyle = '#002810';
-      for (var x = 10; x < w; x += 20) {
-        for (var y = 10; y < h; y += 20) {
-          radarCtx.fillRect(x, y, 2, 2);
+    var _lastLedColor = '';
+    var _ledLogCount = 0;
+    Module.onUpdateLed = function(r, g, b) {
+      var color = 'rgb(' + r + ',' + g + ',' + b + ')';
+      var glow = '0 0 10px ' + color;
+      document.querySelectorAll('.led-pixel').forEach(function(px) {
+        px.style.background = color;
+        px.style.boxShadow = glow;
+      });
+      if (color !== _lastLedColor) {
+        _lastLedColor = color;
+        _ledLogCount++;
+        if (_ledLogCount <= 5) {
+          console.log('[WASM_HAL:LED] Vertical LED Stripes set -> ' + color);
+          if (_ledLogCount === 5) console.log('[WASM_HAL:LED] (Throttling further LED color change logs)');
         }
-      }
-
-      var cx = w / 2, cy = h - 30;
-      var maxR = 150;
-
-      radarCtx.strokeStyle = '#005522';
-      radarCtx.lineWidth = 1;
-      for (var r = 30; r <= maxR; r += 40) {
-        radarCtx.beginPath();
-        radarCtx.arc(cx, cy, r, Math.PI, 2 * Math.PI);
-        radarCtx.stroke();
-      }
-
-      var angles = [-120, -90, -60, -30, 0, 30, 60, 90, 120];
-      for (var i = 0; i < angles.length; i++) {
-        var angRad = (angles[i] - 90) * Math.PI / 180;
-        var x2 = cx + maxR * Math.cos(angRad);
-        var y2 = cy + maxR * Math.sin(angRad);
-        radarCtx.beginPath();
-        radarCtx.moveTo(cx, cy);
-        radarCtx.lineTo(x2, y2);
-        radarCtx.stroke();
-
-        if (Math.abs(angles[i]) <= 90 || angles[i] === -120 || angles[i] === 120) {
-          radarCtx.fillStyle = '#00ff66';
-          radarCtx.font = '10px monospace';
-          var tx = cx + (maxR + 10) * Math.cos(angRad) - 10;
-          var ty = cy + (maxR + 10) * Math.sin(angRad) + 4;
-          radarCtx.fillText(angles[i] + '°', tx, ty);
-        }
-      }
-
-      var targetAngleRad = (yaw - 90) * Math.PI / 180;
-      var targetR = maxR * (0.3 + (Math.abs(pitch) / 90.0) * 0.7);
-      var dotX = cx + targetR * Math.cos(targetAngleRad);
-      var dotY = cy + targetR * Math.sin(targetAngleRad);
-
-      radarCtx.strokeStyle = '#00ff66';
-      radarCtx.lineWidth = 2;
-      radarCtx.setLineDash([4, 2]);
-      radarCtx.beginPath();
-      radarCtx.moveTo(cx, cy);
-      radarCtx.lineTo(dotX, dotY);
-      radarCtx.stroke();
-      radarCtx.setLineDash([]);
-
-      radarCtx.fillStyle = '#ff2222';
-      radarCtx.beginPath();
-      radarCtx.arc(dotX, dotY, 8, 0, 2 * Math.PI);
-      radarCtx.fill();
-      radarCtx.strokeStyle = '#ffffff';
-      radarCtx.lineWidth = 2;
-      radarCtx.stroke();
-
-      radarCtx.fillStyle = '#00ff66';
-      radarCtx.font = 'bold 13px monospace';
-      radarCtx.fillText('YAW: ' + (yaw > 0 ? '+' : '') + yaw.toFixed(1) + '°', 12, 22);
-      radarCtx.fillText('PITCH: ' + (pitch > 0 ? '+' : '') + pitch.toFixed(1) + '°', 180, 22);
-
-      if (Math.abs(yaw) > 60 || Math.abs(pitch) > 60) {
-        radarCtx.fillStyle = '#ffcc00';
-        radarCtx.font = 'italic bold 13px sans-serif';
-        radarCtx.fillText(yaw < 0 ? '*SWOOSH LEFT!*' : (yaw > 0 ? '*SWOOSH RIGHT!*' : '*LOOK UP!*'), cx - 48, cy - 10);
-      } else if (yaw === 0 && pitch === 0) {
-        radarCtx.fillStyle = '#00ff66';
-        radarCtx.font = '11px monospace';
-        radarCtx.fillText('[ HOME LOCKED ]', cx - 44, cy - 10);
-      }
-
-      if (typeof Module._radarLogCount === 'undefined') Module._radarLogCount = 0;
-      if (lastRadarLogYaw === null || Math.abs(lastRadarLogYaw - yaw) >= 15.0 || Math.abs(lastRadarLogPitch - pitch) >= 15.0) {
-        if (Module._radarLogCount < 3) {
-          Module._radarLogCount++;
-          console.log('[RADAR] 🎯 Head servo moved -> YAW: ' + (yaw > 0 ? '+' : '') + yaw.toFixed(1) + '° | PITCH: ' + (pitch > 0 ? '+' : '') + pitch.toFixed(1) + '°');
-          if (Module._radarLogCount === 3) {
-            console.log('[RADAR] (Throttling further routine radar movement logs — UI canvas continues tracking smoothly)');
-          }
-        }
-        lastRadarLogYaw = yaw;
-        lastRadarLogPitch = pitch;
       }
     };
-    Module.updateServoRadar(0, 0);
 
-    // Web Bluetooth API & BLE GATT Provisioning Bridge
-    Module.onBleNotify = function(jsonPayload) {
-      var box = document.getElementById('ble-status-box');
-      if (box) box.textContent = 'BLE GATT Notify Response: ' + jsonPayload;
-      console.log('[WASM_BLE] 📤 Transmitting GATT Notify on Char (e2e5e5e3): ' + jsonPayload);
-    };
-
-    function requestWebBluetooth() {
-      console.log('[WEB_BT] 🔵 Requesting browser Bluetooth Low Energy scan (filtering Service UUID e2e5e5e0-1234-5678-1234-56789abcdef0)...');
-      if (!navigator.bluetooth) {
-        console.error('[WEB_BT] Web Bluetooth API is not available in this browser context (requires secure HTTPS/localhost Chrome/Edge).');
-        return;
-      }
-      navigator.bluetooth.requestDevice({
-        filters: [{ services: ['e2e5e5e0-1234-5678-1234-56789abcdef0'] }]
-      }).then(function(device) {
-        console.log('[WEB_BT] ✓ Paired with physical StackChan device: ' + device.name + ' (' + device.id + ')');
-      }).catch(function(err) {
-        console.error('[WEB_BT] Web Bluetooth pairing error/cancelled: ' + err);
+    function initLedStrips() {
+      ['left-led-bar', 'right-led-bar'].forEach(function(id) {
+        var bar = document.getElementById(id);
+        if (!bar) return;
+        bar.innerHTML = '';
+        for (var i = 0; i < 10; i++) {
+          var px = document.createElement('div');
+          px.className = 'led-pixel';
+          bar.appendChild(px);
+        }
       });
     }
-
-    function sendBleHandshake() {
-      var payload = JSON.stringify({ cmd: "handshake", data: "StackChanWorldMobileApp_v2" });
-      console.log('[WASM_BLE] 📥 Simulating Mobile App GATT Write on Char (e2e5e5e3): ' + payload);
-      if (Module.ccall) {
-        Module.ccall('wasm_ble_send_config_json', null, ['string'], [payload]);
-      }
-    }
-
-    function sendBleWifi() {
-      var ssid = document.getElementById('wifi-ssid').value || 'StackChan_World_AP';
-      var pass = document.getElementById('wifi-pass').value || 'stackchan2026';
-      var payload = JSON.stringify({ cmd: "setWifi", data: { ssid: ssid, password: pass } });
-      console.log('[WASM_BLE] 📥 Simulating Mobile App Wi-Fi Provisioning Write on Char (e2e5e5e3): ' + payload);
-      if (Module.ccall) {
-        Module.ccall('wasm_ble_send_config_json', null, ['string'], [payload]);
-      }
-    }
-
-    function sendBleStatus() {
-      var payload = JSON.stringify({ cmd: "getWifiStatus" });
-      console.log('[WASM_BLE] 📥 Querying BLE Wi-Fi Provisioning Status...');
-      if (Module.ccall) {
-        Module.ccall('wasm_ble_send_config_json', null, ['string'], [payload]);
-      }
-    }
-
-    Module.onWasmProtocolState = function(stateText) {
-        var box = document.getElementById('proto-status-box');
-        if (box) box.textContent = 'WasmProtocol Status: ' + stateText;
-        console.log('[WASM_PROTOCOL] State update -> ' + stateText);
-      };
-
-      Module.onWasmProtocolTxJson = function(jsonPayload) {
-        var box = document.getElementById('proto-status-box');
-        if (box) box.textContent = 'Last Outgoing TX: ' + jsonPayload;
-        console.log('[WASM_PROTOCOL:TX] Transmitted -> ' + jsonPayload);
-      };
-
-      function initLedStrips() {
-        ['left-led-bar', 'right-led-bar'].forEach(function(id) {
-          var bar = document.getElementById(id);
-          if (!bar) return;
-          bar.innerHTML = '';
-          for (var i = 0; i < 10; i++) {
-            var px = document.createElement('div');
-            px.className = 'led-pixel';
-            bar.appendChild(px);
-          }
-        });
-      }
-      window.addEventListener('DOMContentLoaded', function() {
-        initLedStrips();
-      });
-      window.addEventListener('click', function() {
-        if (_vadAudioCtx && _vadAudioCtx.state === 'suspended') _vadAudioCtx.resume();
-      });
-      // voj-chan: LED log throttling — log first call and subsequent color changes only
-      var _lastLedColor = '';
-      var _ledLogCount = 0;
-      Module.onUpdateLed = function(r, g, b) {
-        var color = 'rgb(' + r + ',' + g + ',' + b + ')';
-        var glow = '0 0 10px ' + color;
-        document.querySelectorAll('.led-pixel').forEach(function(px) {
-          px.style.background = color;
-          px.style.boxShadow = glow;
-        });
-        if (color !== _lastLedColor) {
-          _lastLedColor = color;
-          _ledLogCount++;
-          if (_ledLogCount <= 5) {
-            console.log('[WASM_HAL:LED] Vertical LED Stripes set -> ' + color);
-            if (_ledLogCount === 5) console.log('[WASM_HAL:LED] (Throttling further LED color change logs)');
-          }
-        }
-      };
-
-      // ─── Audio Pipeline: Live Mic, VAD Gating, Web Audio PCM Echo ─────
-      var _isScreenMicRecording = false;
-      var _isAssistantLoopActive = false;
-      var _assistantState = 'idle';
-      var _mediaStream = null;
-      var _recordedPcm = [];
-      var _vadAudioCtx = null;
-      var _vadPreampNode = null;
-      var _playbackAnalyser = null;
-      var _rawHistory = new Array(320).fill(0.001);
-      var _backendHistory = new Array(320).fill(0.0);
-      var _agentHistory = new Array(320).fill(0.0);
-      var _agentNetworkHistory = new Array(320).fill(0.0);
-      var _stateHistory = new Array(320).fill('idle');
-      var _serverAckRms = 0.0;
-      var _agentPlaybackRms = 0.0;
-      var _liveMicRms = 0.0;
-      var _vadThreshold = 0.004;
-      var _chartYMax = 0.15;
-      var _tenetMode = false;
-      var _maxDurationSeconds = 45;
-      var _turnCount = 0;
-
-      function sendServerConfig() {
-        if (window._wasmProtocolWs && window._wasmProtocolWs.readyState === 1) {
-          window._wasmProtocolWs.send(JSON.stringify({
-            type: 'config',
-            tenet: _tenetMode,
-            max_duration: _maxDurationSeconds
-          }));
-        }
-      }
-
-      function updateServerCap(val) {
-        _maxDurationSeconds = parseInt(val, 10);
-        var txt = _maxDurationSeconds === 0 ? '∞ (Off)' : _maxDurationSeconds + 's';
-        document.getElementById('server-cap-display').textContent = txt;
-        sendServerConfig();
-        console.log('[WASM_CFG] Server recording cap updated -> ' + txt);
-      }
-
-      function updateVadHyperParams() {
-        var pos = parseFloat(document.getElementById('vad-pos-slider').value);
-        var neg = parseFloat(document.getElementById('vad-neg-slider').value);
-        var minF = parseInt(document.getElementById('vad-min-slider').value, 10);
-        var redF = parseInt(document.getElementById('vad-redemption-slider').value, 10);
-        
-        document.getElementById('vad-pos-display').textContent = pos.toFixed(2);
-        document.getElementById('vad-neg-display').textContent = neg.toFixed(2);
-        document.getElementById('vad-min-display').textContent = minF;
-        document.getElementById('vad-redemption-display').textContent = redF;
-
-        if (window._sileroVad && window._sileroVad.options) {
-          window._sileroVad.options.positiveSpeechThreshold = pos;
-          window._sileroVad.options.negativeSpeechThreshold = neg;
-          window._sileroVad.options.minSpeechFrames = minF;
-          window._sileroVad.options.redemptionFrames = redF;
-        }
-      }
-
-      // voj-chan: UI control callbacks
-      function updateVadThreshold(val) {
-        _vadThreshold = parseFloat(val);
-        document.getElementById('vad-threshold-display').textContent = _vadThreshold.toFixed(3);
-      }
-      function updateYScale(val) {
-        _chartYMax = parseFloat(val);
-        document.getElementById('vad-yscale-display').textContent = _chartYMax.toFixed(2);
-      }
-      function updatePreamp(val) {
-        var gain = parseFloat(val);
-        if (_vadPreampNode) _vadPreampNode.gain.value = gain;
-        document.getElementById('vad-preamp-display').textContent = gain.toFixed(1) + 'x';
-      }
-      function stopAssistantLoop() {
-        _isAssistantLoopActive = false;
-        _isScreenMicRecording = false;
-        _recordedPcm = [];
-        if (Module.ccall) {
-          Module.ccall('wasm_app_toggle_chat', null, [], []);
-        }
-        var box = document.getElementById('proto-status-box');
-        if (box) box.textContent = 'WasmProtocol Status: Assistant loop stopped. Tap canvas to restart.';
-        console.log('[WASM_VAD] ⏹ Assistant loop manually toggled off via canvas tap');
-      }
-
-      // voj-chan: Lazy-initialized live microphone on first user click with raw PCM capture & BPF
-      function initLiveMicrophone() {
-        try {
-          var actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-          if (actx.state === 'suspended') actx.resume();
-          _vadAudioCtx = actx;
-        } catch(e) {
-          console.log('[WASM_VAD] Web Audio AudioContext initialization error: ' + e);
-        }
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          console.log('[WASM_VAD] getUserMedia not available — waveform will remain flat at 0.0');
-          return;
-        }
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
-          _mediaStream = stream;
-          var actx = _vadAudioCtx;
-          if (!_playbackAnalyser) {
-            _playbackAnalyser = actx.createAnalyser();
-            _playbackAnalyser.fftSize = 512;
-            _playbackAnalyser.smoothingTimeConstant = 0.4;
-            _playbackAnalyser.connect(actx.destination);
-          }
-          var micSrc = actx.createMediaStreamSource(stream);
-          var micProc = actx.createScriptProcessor(1024, 1, 1);
-          var micMute = actx.createGain();
-          micMute.gain.value = 0;
-          micProc.onaudioprocess = function(evt) {
-            var d = evt.inputBuffer.getChannelData(0);
-            var sum = 0.0;
-            for (var i = 0; i < d.length; i++) sum += d[i] * d[i];
-            _liveMicRms = Math.sqrt(sum / d.length);
-
-            if (Module._audioProcessingEnabled && Module.ccall && Module._malloc && Module.HEAP16) {
-              if (!window._pcmBridgePtr || window._pcmBridgeCap < d.length) {
-                if (window._pcmBridgePtr) Module._free(window._pcmBridgePtr);
-                window._pcmBridgeCap = d.length;
-                window._pcmBridgePtr = Module._malloc(d.length * 2);
-              }
-              var offset = window._pcmBridgePtr >> 1;
-              for (var k = 0; k < d.length; k++) {
-                Module.HEAP16[offset + k] = Math.max(-32768, Math.min(32767, Math.floor(d[k] * 32767)));
-              }
-              Module.ccall('hal_feed_pcm_audio', null, ['number', 'number'], [window._pcmBridgePtr, d.length]);
-            }
-          };
-          micSrc.connect(micProc);
-          micProc.connect(micMute);
-          micMute.connect(actx.destination);
-
-          // Initialize Silero ONNX MicVAD and continuous PCM audio streaming
-          if (window.vad && window.vad.MicVAD) {
-            window.vad.MicVAD.new({
-              stream: stream,
-              positiveSpeechThreshold: 0.50,
-              negativeSpeechThreshold: 0.35,
-              minSpeechFrames: 3,
-              redemptionFrames: 8,
-              onSpeechStart: function() {
-                if (!_isAssistantLoopActive || !Module._audioProcessingEnabled) return;
-                _neuralSpeechActive = true;
-                // Stage 1: Compound Near-Field Acoustic Volume Gate with Pre-Roll Window Max Evaluation
-                var maxRecentRms = (_recentRmsBuffer && _recentRmsBuffer.length) ? Math.max.apply(null, _recentRmsBuffer) : _liveMicRms;
-                if (maxRecentRms < _vadThreshold) {
-                  console.log('[WASM_VAD:GATE] ⏳ Neural speech detected below acoustic floor (MaxRMS=' + maxRecentRms.toFixed(4) + ' < Thresh=' + _vadThreshold.toFixed(3) + '). Awaiting acoustic onset climb...');
-                  return;
-                }
-                if (_vadSpeechState === 1) return; // Suppress redundant re-triggers in unbroken segments
-                _vadSpeechState = 1;
-                console.log('[WASM_VAD:SILERO] 🗣️ Speech start detected (MaxRMS=' + maxRecentRms.toFixed(4) + ' >= Thresh=' + _vadThreshold.toFixed(3) + ')!');
-                if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [1]);
-              },
-              onSpeechEnd: function(audio) {
-                _neuralSpeechActive = false;
-                if (!_isAssistantLoopActive || !Module._audioProcessingEnabled) return;
-                if (_vadSpeechState === 1) {
-                  _vadSpeechState = 0;
-                  console.log('[WASM_VAD:SILERO] 🤫 Speech end detected!');
-                  if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [0]);
-                } else {
-                  console.log('[WASM_VAD:GATE] 🚫 Neural speech segment ended without reaching volume floor. Suppressed.');
-                }
-              },
-              onFrameProcessed: function(probabilities, frame) {
-                window._lastOnFrameProcessedArgs = [typeof probabilities, typeof frame, probabilities ? Object.keys(probabilities) : null];
-                var f = frame || (probabilities && probabilities.frame);
-                if (f && f.length) {
-                  var sum = 0.0;
-                  for (var fIdx = 0; fIdx < f.length; fIdx++) sum += f[fIdx] * f[fIdx];
-                  _liveMicRms = Math.sqrt(sum / f.length);
-                  window._debugLiveMicRms = _liveMicRms;
-
-                  // Maintain 5-frame pre-roll RMS window (~300ms history)
-                  if (typeof _recentRmsBuffer === 'undefined') _recentRmsBuffer = [];
-                  _recentRmsBuffer.push(_liveMicRms);
-                  if (_recentRmsBuffer.length > 5) _recentRmsBuffer.shift();
-
-                  // Continuous acoustic onset climb verification while neural VAD segment remains active
-                  if (_neuralSpeechActive && _vadSpeechState === 0 && _isAssistantLoopActive && Module._audioProcessingEnabled) {
-                    var maxRecentRms = Math.max.apply(null, _recentRmsBuffer);
-                    if (maxRecentRms >= _vadThreshold) {
-                      _vadSpeechState = 1;
-                      console.log('[WASM_VAD:SILERO] 🗣️ Speech start confirmed via acoustic onset climb (MaxRMS=' + maxRecentRms.toFixed(4) + ' >= Thresh=' + _vadThreshold.toFixed(3) + ')!');
-                      if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [1]);
-                    }
-                  }
-                }
-              }
-            }).then(function(myvad) {
-              window._sileroVad = myvad;
-              myvad.start();
-              console.log('[WASM_VAD:SILERO] ✓ Silero ONNX MicVAD active (continuous PCM streaming -> WasmAudioProcessor)');
-            }).catch(function(err) {
-              console.log('[WASM_VAD:SILERO] MicVAD load error: ' + err + ' (Using script processing fallback)');
-            });
-          } else {
-            console.log('[WASM_VAD:SILERO] @ricky0123/vad-web not loaded — test injection available');
-          }
-
-          console.log('[WASM_VAD] ✓ Live mic initialized (AudioContext=' + actx.state + ', PreAmp=1.0x+BPF)');
-        }).catch(function(err) {
-          console.log('[WASM_VAD] Mic permission denied (' + err + ') — waveform will remain flat at 0.0');
-        });
-      }
-
-      var _vadSpeechState = 0;     // 0: silent, 1: speech active (from Silero VAD)
-      var _neuralSpeechActive = false; // Tracks active neural VAD classification independent of volume gate
-      var _recentRmsBuffer = [];       // Rolling 5-frame pre-roll RMS window (~300ms)
-      var _vadMarkerHistory = new Array(320).fill(0);
-
-      var _monitorWs = null;
-      var _serverDownlinkRms = 0.0;
-      window._activeServerSessionId = null;
-
-      function initAuthCredentials() {
-        var mac = localStorage.getItem("app_config.mac_address");
-        if (!mac) {
-          mac = "DA:E5:31:89:AB:CD";
-          localStorage.setItem("app_config.mac_address", mac);
-        }
-        var uuid = localStorage.getItem("app_config.uuid");
-        if (!uuid) {
-          uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : "550e8400-e29b-41d4-a716-446655440000";
-          localStorage.setItem("app_config.uuid", uuid);
-        }
-        var token = localStorage.getItem("app_config.token");
-        if (!token) {
-          token = "dev_token_8081";
-          localStorage.setItem("app_config.token", token);
-        }
-
-        var macEl = document.getElementById('auth-device-mac');
-        var uuidEl = document.getElementById('auth-client-uuid');
-        var tokenEl = document.getElementById('auth-token-input');
-        if (macEl) macEl.textContent = mac;
-        if (uuidEl) uuidEl.textContent = uuid;
-        if (tokenEl) tokenEl.value = token;
-      }
-      initAuthCredentials();
-
-      function updateAuthToken(val) {
-        localStorage.setItem("app_config.token", val.trim());
-        console.log('[WASM_AUTH] Updated active token in localStorage -> ' + val.trim());
-      }
-
-      function initMonitorWebSocket(sessionId) {
-        if (!sessionId) return;
-        try {
-          var proto = (window.location && window.location.protocol === 'https:') ? 'wss://' : 'ws://';
-          if (window._monitorWs) try { window._monitorWs.close(); } catch(e) {}
-          var ws = new WebSocket(proto + window.location.host + '/ws_monitor?session_id=' + encodeURIComponent(sessionId));
-          ws.onopen = function() { console.log('[WASM_MONITOR] ✓ Connected to /ws_monitor bound to session: ' + sessionId.slice(0, 8) + '...'); };
-          ws.onmessage = function(evt) {
-            try {
-              var d = JSON.parse(evt.data);
-              if (d.type === 'uplink_rms') {
-                _serverAckRms = d.rms;
-                clearTimeout(window._uplinkRmsTimeout);
-                window._uplinkRmsTimeout = setTimeout(function() { _serverAckRms = 0.0; }, 200);
-              } else if (d.type === 'downlink_rms') {
-                _serverDownlinkRms = d.rms;
-                clearTimeout(window._downlinkRmsTimeout);
-                window._downlinkRmsTimeout = setTimeout(function() { _serverDownlinkRms = 0.0; }, 200);
-              }
-            } catch(err) {
-              console.error('[WASM_MONITOR] JSON parse error:', err);
-            }
-          };
-          ws.onclose = function(evt) {
-            if (evt && (evt.code === 1000 || evt.code === 1008 || evt.code === 4001 || evt.code === 4004)) {
-              console.warn('[WASM_MONITOR] Session cleanly closed or rejected (code ' + evt.code + '). Halting auto-reconnect loop.');
-              if (window._activeServerSessionId === sessionId) window._activeServerSessionId = null;
-              return;
-            }
-            if (window._activeServerSessionId === sessionId) {
-              setTimeout(function() { initMonitorWebSocket(sessionId); }, 2000);
-            }
-          };
-          window._monitorWs = ws;
-          _monitorWs = ws;
-        } catch(e) {
-          console.error('[WASM_MONITOR] WebSocket initialization error:', e);
-        }
-      }
-
-      function initDebugWebSocket(sessionId) {
-        if (!sessionId) return;
-        try {
-          var proto = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
-          if (window._debugWs) try { window._debugWs.close(); } catch(e) {}
-          var debugWs = new WebSocket(proto + window.location.host + '/ws_debug?session_id=' + encodeURIComponent(sessionId));
-          debugWs.onopen = function() { console.log('[WASM_DEBUG] ✓ Connected to /ws_debug bound to session: ' + sessionId.slice(0, 8) + '...'); };
-          debugWs.onmessage = function(evt) {
-            try {
-              var d = JSON.parse(evt.data);
-              if (d.type === 'state') {
-                var phaseEl = document.getElementById('dbg-phase');
-                if (phaseEl) phaseEl.textContent = d.phase;
-                var bufEl = document.getElementById('dbg-buffered');
-                if (bufEl) bufEl.textContent = d.buffered_seconds.toFixed(2);
-                var chunkEl = document.getElementById('dbg-chunks');
-                if (chunkEl) chunkEl.textContent = d.chunk_count;
-                var tenetEl = document.getElementById('dbg-tenet');
-                if (tenetEl) tenetEl.textContent = d.tenet ? 'ON' : 'OFF';
-              } else if (d.type === 'progress') {
-                var progEl = document.getElementById('dbg-progress');
-                if (progEl) progEl.textContent = d.sent + '/' + d.total + ' (' + d.remaining_seconds.toFixed(1) + 's left)';
-              } else if (d.type === 'log') {
-                var logDiv = document.getElementById('debug-log');
-                if (logDiv) {
-                  var line = document.createElement('div');
-                  line.textContent = d.msg;
-                  logDiv.appendChild(line);
-                  while (logDiv.children.length > 200) logDiv.removeChild(logDiv.firstChild);
-                  logDiv.scrollTop = logDiv.scrollHeight;
-                }
-              }
-            } catch(parseErr) {}
-          };
-          debugWs.onclose = function(evt) {
-            if (evt && (evt.code === 1000 || evt.code === 1008 || evt.code === 4001 || evt.code === 4004)) {
-              console.warn('[WASM_DEBUG] Session cleanly closed or rejected (code ' + evt.code + '). Halting auto-reconnect loop.');
-              if (window._activeServerSessionId === sessionId) window._activeServerSessionId = null;
-              return;
-            }
-            if (window._activeServerSessionId === sessionId) {
-              setTimeout(function() { initDebugWebSocket(sessionId); }, 2000);
-            }
-          };
-          window._debugWs = debugWs;
-        } catch(connErr) {
-          console.error('[DEBUG_WS] Connection error:', connErr);
-        }
-      }
-
-      window._onServerSessionAssigned = function(sessionId) {
-        console.log('[WASM_APP] 🤝 Server session assigned: ' + sessionId.slice(0, 8) + '... (binding debug widgets exclusively to this session)');
-        window._activeServerSessionId = sessionId;
-        initMonitorWebSocket(sessionId);
-        initDebugWebSocket(sessionId);
-      };
-
-      window.toggleWebcamStream = function() {
-        var video = document.getElementById('webcam-feed');
-        if (!video) return;
-        if (video.srcObject) {
-          var tracks = video.srcObject.getTracks();
-          tracks.forEach(function(track) { track.stop(); });
-          video.srcObject = null;
-          console.log('[WASM_CAMERA] ⏸️ WebRTC webcam stream suspended.');
-        } else {
-          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } }).then(function(stream) {
-              video.srcObject = stream;
-              console.log('[WASM_CAMERA] ▶️ Warm WebRTC webcam stream active offscreen (320x240 for AVATAR rendering).');
-            }).catch(function(err) {
-              console.log('[WASM_CAMERA:ERR] getUserMedia failed: ' + err);
-            });
-          } else {
-            console.log('[WASM_CAMERA:WARN] navigator.mediaDevices not supported in this environment.');
-          }
-        }
-      };
-
-      window._captureWebcamRgb565 = function(dstPtr, maxLen) {
-        var video = document.getElementById('webcam-feed');
-        var canvas = document.getElementById('webcam-canvas-offscreen');
-        if (!canvas || !Module.HEAPU8) return 0;
-        var ctx = canvas.getContext('2d');
-        if (video && video.srcObject && video.readyState >= 2) {
-          ctx.drawImage(video, 0, 0, 320, 240);
-        } else {
-          var grad = ctx.createLinearGradient(0, 0, 320, 240);
-          grad.addColorStop(0, '#ec4899'); // AVATAR Pink
-          grad.addColorStop(1, '#6366f1'); // Indigo
-          ctx.fillStyle = grad;
-          ctx.fillRect(0, 0, 320, 240);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 22px sans-serif';
-          ctx.fillText('AVATAR WEBRTC VISION', 35, 125);
-        }
-        var imgData = ctx.getImageData(0, 0, 320, 240);
-        var data = imgData.data;
-        var rgb565 = new Uint8Array(320 * 240 * 2);
-        var idx = 0;
-        for (var i = 0; i < data.length; i += 4) {
-          var r = (data[i] >> 3) & 0x1F;
-          var g = (data[i + 1] >> 2) & 0x3F;
-          var b = (data[i + 2] >> 3) & 0x1F;
-          var rgb = (r << 11) | (g << 5) | b;
-          rgb565[idx++] = rgb & 0xFF;        // Low byte (Little Endian)
-          rgb565[idx++] = (rgb >> 8) & 0xFF; // High byte
-        }
-        var len = rgb565.length;
-        if (len <= maxLen) {
-          Module.HEAPU8.set(rgb565, dstPtr);
-          return len;
-        }
-        return 0;
-      };
-
-      var _lastJpegLogTime = 0;
-      var _jpegSkipCount = 0;
-      window._captureWebcamJpeg = function(dstPtr, maxLen) {
-        var video = document.getElementById('webcam-feed');
-        var canvas = document.getElementById('webcam-canvas-offscreen');
-        if (!canvas) return 0;
-        var ctx = canvas.getContext('2d');
-        if (video && video.srcObject && video.readyState >= 2) {
-          ctx.drawImage(video, 0, 0, 320, 240);
-        } else {
-          var grad = ctx.createLinearGradient(0, 0, 320, 240);
-          grad.addColorStop(0, '#06b6d4');
-          grad.addColorStop(1, '#3b82f6');
-          ctx.fillStyle = grad;
-          ctx.fillRect(0, 0, 320, 240);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 20px monospace';
-          ctx.fillText('WASM VISION TEST', 65, 125);
-        }
-        var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        var base64Data = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
-        var binaryStr = atob(base64Data);
-        var len = binaryStr.length;
-        if (len > maxLen) {
-          console.log('[WASM_CAMERA:ERR] Captured JPEG size (' + len + ') exceeds buffer capacity (' + maxLen + ').');
-          return 0;
-        }
-        var jpegBytes = new Uint8Array(len);
-        for (var i = 0; i < len; i++) {
-          jpegBytes[i] = binaryStr.charCodeAt(i);
-        }
-        if (Module.HEAPU8) {
-          Module.HEAPU8.set(jpegBytes, dstPtr);
-        } else {
-          console.log('[WASM_CAMERA:ERR] Module.HEAPU8 undefined.');
-          return 0;
-        }
-        var now = performance.now();
-        if (_lastJpegLogTime === 0 || (now - _lastJpegLogTime) >= 1000) {
-          var skipMsg = _jpegSkipCount > 0 ? ' (skipped ' + _jpegSkipCount + ' logs in last ' + Math.round(now - _lastJpegLogTime) + 'ms)' : '';
-          console.log('[WASM_CAMERA] ✓ Synchronous JPEG captured (' + len + ' bytes written to memory).' + skipMsg);
-          _lastJpegLogTime = now;
-          _jpegSkipCount = 0;
-        } else {
-          _jpegSkipCount++;
-        }
-        return len;
-      };
-
-      window._setWebcamMirror = function(enabled) {
-        var video = document.getElementById('webcam-feed');
-        if (video) {
-          video.style.transform = enabled ? 'scaleX(-1)' : 'scaleX(1)';
-        }
-      };
-
-      window._explainWebcamFrame = function(jpegPtr, jpegLen, question, url, token) {
-        if (!Module.HEAPU8 || !jpegPtr || !jpegLen) return 0;
-        var bytes = Module.HEAPU8.subarray(jpegPtr, jpegPtr + jpegLen);
-        var blob = new Blob([bytes], { type: 'image/jpeg' });
-        var formData = new FormData();
-        formData.append('file', blob, 'webcam_frame.jpg');
-        formData.append('question', question || 'Explain what you see in this photo.');
-        
-        var jsonResponse = '';
-        if (url === 'mock://vision' || url.indexOf('localhost:8081/vision') !== -1) {
-          console.log('[WASM_CAMERA] Using local simulated vision endpoint (preventing POST conflict with WebSocket dev server).');
-          jsonResponse = JSON.stringify({ explanation: "Simulated Vision Response: I can see the StackChan desk robot workspace with an active 320x240 webcam stream.", question: question });
-        } else {
-          var xhr = new XMLHttpRequest();
-          xhr.open('POST', url, false);
-          if (token && token.trim() !== '') {
-            xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-          }
-          try {
-            xhr.send(formData);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              jsonResponse = xhr.responseText;
-            } else {
-              console.log('[WASM_CAMERA:HTTP_ERR] Vision server returned HTTP ' + xhr.status + ': ' + xhr.responseText);
-              jsonResponse = JSON.stringify({ error: "HTTP " + xhr.status, details: xhr.responseText });
-            }
-          } catch (err) {
-            console.log('[WASM_CAMERA:NET_ERR] Synchronous XHR failed: ' + err + '. (Returning simulation stub for testing)');
-            jsonResponse = JSON.stringify({ explanation: "Simulated Vision Response: I can see the StackChan desk robot workspace with an active 320x240 webcam stream.", question: question });
-          }
-        }
-        
-        if (typeof allocateUTF8 === 'function') {
-          return allocateUTF8(jsonResponse);
-        } else if (typeof Module._malloc === 'function' && typeof stringToUTF8 === 'function') {
-          var strLen = lengthBytesUTF8(jsonResponse) + 1;
-          var strPtr = Module._malloc(strLen);
-          stringToUTF8(jsonResponse, strPtr, strLen);
-          return strPtr;
-        } else {
-          console.log('[WASM_CAMERA:ERR] String allocation functions unavailable.');
-          return 0;
-        }
-      };
-
-      window.triggerAvatarVisionFrame = function() {
-        if (Module.ccall) {
-          Module.ccall('wasm_camera_test_capture', null, [], []);
-          console.log('[WASM_CAMERA] ✓ Triggered native camera capture and frame emission into authentic Mooncake AVATAR VideoWindow.');
-        }
-      };
-
-      window.testWebcamCapture = function() {
-        console.log('[WASM_CAMERA] Initiating standalone test capture...');
-        window.triggerAvatarVisionFrame();
-        var testBuf = new Uint8Array(65536);
-        var ptr = Module._malloc ? Module._malloc(65536) : 0;
-        if (ptr) {
-          var len = window._captureWebcamJpeg(ptr, 65536);
-          console.log('[WASM_CAMERA] Captured snapshot frame (' + len + ' JPEG bytes)');
-          var respPtr = window._explainWebcamFrame(ptr, len, "Describe this camera test image", "http://localhost:8081/vision", "test_token");
-          if (respPtr) {
-            var respStr = UTF8ToString(respPtr);
-            console.log('[WASM_CAMERA] Explain() completed successfully: ' + respStr);
-            if (Module._free) Module._free(respPtr);
-          }
-          if (Module._free) Module._free(ptr);
-        } else {
-          console.log('[WASM_CAMERA:ERR] Memory allocation failed for test capture.');
-        }
-      };
-
-      var _nextPlaybackTime = 0;
-      window._streamPlaybackChunk = function(arrayBuffer) {
-        if (!_vadAudioCtx) return;
-        if (_vadAudioCtx.state === 'suspended') _vadAudioCtx.resume();
-
-        var pcm16 = new Int16Array(arrayBuffer);
-        var float32 = new Float32Array(pcm16.length);
-        for (var i = 0; i < pcm16.length; i++) {
-          float32[i] = pcm16[i] / 32768.0;
-        }
-
-        var audioBuf = _vadAudioCtx.createBuffer(1, float32.length, 16000);
-        audioBuf.getChannelData(0).set(float32);
-
-        var srcNode = _vadAudioCtx.createBufferSource();
-        srcNode.buffer = audioBuf;
-        if (_playbackAnalyser) {
-          srcNode.connect(_playbackAnalyser);
-        } else {
-          srcNode.connect(_vadAudioCtx.destination);
-        }
-
-        var now = _vadAudioCtx.currentTime;
-        var startAt = Math.max(now, _nextPlaybackTime);
-        srcNode.start(startAt);
-        _nextPlaybackTime = startAt + audioBuf.duration;
-      };
-
-      window.onProtocolRxJson = function(jsonStr) {
-        try {
-          var d = JSON.parse(jsonStr);
-          if (d.type === 'tts' && d.state === 'start') {
-            _nextPlaybackTime = 0; // Reset streaming scheduler timeline for new conversational turn
-            console.log('[WASM_APP] TTS start received — streaming playback pipeline ready.');
-          } else if (d.type === 'tts' && (d.state === 'stop' || d.state === 'end')) {
-            console.log('[WASM_APP] TTS stream ended cleanly.');
-          }
-        } catch(e) {}
-      };
-
-      function ensureAudioContextActive() {
-        if (!_vadAudioCtx || !_mediaStream) {
-          initLiveMicrophone();
-        } else if (_vadAudioCtx.state === 'suspended') {
-          _vadAudioCtx.resume();
-        }
-      }
-
-      // voj-chan: Return to listening state — the core of the continuous loop
-      function returnToListening() {
-        _assistantState = 'listening';
-        _isScreenMicRecording = true;
-        _recordedPcm = [];
-        if (Module.ccall) {
-          Module.ccall('wasm_app_start_listening', null, [], []);
-        }
-        var box = document.getElementById('proto-status-box');
-        if (box) box.textContent = 'WasmProtocol Status: 🟢 Listening (Turn #' + (_turnCount + 1) + ')... speak to continue';
-        console.log('[WASM_VAD] 🟢 Auto-returned to LISTENING (AutoStop loop, next turn #' + (_turnCount + 1) + ')');
-      }
-
-      // voj-chan: Screen tap starts/stops the continuous assistant loop
-      function toggleScreenMicVad() {
-        ensureAudioContextActive();
-        if (!Module._isAssistantAppRunning) return;
-        var box = document.getElementById('proto-status-box');
-
-        if (!_isAssistantLoopActive) {
-          _isAssistantLoopActive = true;
-          _turnCount = 0;
-          _isScreenMicRecording = true;
-          _recordedPcm = [];
-          if (Module.ccall) {
-            Module.ccall('wasm_app_toggle_chat', null, [], []);
-          }
-          if (window._wasmProtocolWs && window._wasmProtocolWs.readyState === 1) {
-            window._wasmProtocolWs.send(JSON.stringify({type: 'config', tenet: _tenetMode}));
-          }
-          console.log('[WASM_VAD] 🟢 Assistant loop ACTIVATED via wasm_app_toggle_chat');
-          if (box) box.textContent = 'WasmProtocol Status: 🟢 Listening (Turn #1)... speak to interact';
-        } else {
-          stopAssistantLoop();
-        }
-      }
-      document.body.addEventListener('mousedown', function() {
-        if (typeof ensureAudioContextActive === 'function') ensureAudioContextActive();
-      }, { once: true });
-
-      function drawVadChart() {
-        var chartCvs = document.getElementById('vad-chart');
-        if (!chartCvs) return;
-        var ctx = chartCvs.getContext('2d');
-        var w = chartCvs.width, h = chartCvs.height;
-
-        var liveRms = _liveMicRms;
-        _liveMicRms *= 0.95; // Smooth inter-frame decay
-        var now = Date.now();
-        if (typeof _lastVadDiagTime === 'undefined' || now - _lastVadDiagTime > 60000) {
-          _lastVadDiagTime = now;
-          console.log('[WASM_VAD:DIAG] AudioContext state=' + (_vadAudioCtx ? _vadAudioCtx.state : 'null') + ' | Live Mic RMS=' + liveRms.toFixed(4) + ' (Throttled to once per minute)');
-        }
-
-        // Measure real-time speaker playback RMS (Trace 2: Local Acoustic vs Trace 1: Network Downlink)
-        var localAgentRms = 0.0;
-        if (_playbackAnalyser && _vadAudioCtx && _vadAudioCtx.state === 'running') {
-          var fftData = new Float32Array(_playbackAnalyser.fftSize);
-          _playbackAnalyser.getFloatTimeDomainData(fftData);
-          var sumSq = 0.0;
-          for (var fIdx = 0; fIdx < fftData.length; fIdx++) sumSq += fftData[fIdx] * fftData[fIdx];
-          localAgentRms = Math.sqrt(sumSq / fftData.length);
-        }
-        var agentRms = localAgentRms;
-        _agentPlaybackRms = agentRms;
-
-        _rawHistory.shift();
-        _rawHistory.push(liveRms);
-        _backendHistory.shift();
-        _backendHistory.push(_serverAckRms);
-        _agentHistory.shift();
-        _agentHistory.push(agentRms);
-        _agentNetworkHistory.shift();
-        _agentNetworkHistory.push(_serverDownlinkRms);
-        _vadMarkerHistory.shift();
-        _vadMarkerHistory.push(_vadSpeechState);
-        _stateHistory.shift();
-        _stateHistory.push(_assistantState);
-
-        ctx.fillStyle = '#020617';
-        ctx.fillRect(0, 0, w, h);
-
-        var plotH = h - 32;
-        var plotBase = h - 6;
-
-        // Render Operational Stage Background Bands (Listening / Speaking)
-        for (var s = 0; s < _stateHistory.length; s++) {
-          var startX = (s / (_stateHistory.length - 1)) * w;
-          var barW = Math.max(3, w / _stateHistory.length);
-          if (_stateHistory[s] === 'listening') {
-            ctx.fillStyle = 'rgba(22, 101, 52, 0.25)';
-            ctx.fillRect(startX, 18, barW, plotH);
-          } else if (_stateHistory[s] === 'speaking') {
-            ctx.fillStyle = 'rgba(6, 182, 212, 0.25)';
-            ctx.fillRect(startX, 18, barW, plotH);
-          }
-        }
-
-        // Render VAD Speech Active Window Highlights
-        for (var m = 0; m < _vadMarkerHistory.length; m++) {
-          if (_vadMarkerHistory[m] === 1) {
-            var startX = (m / (_vadMarkerHistory.length - 1)) * w;
-            var barW = Math.max(3, w / _vadMarkerHistory.length);
-            ctx.fillStyle = 'rgba(34, 197, 94, 0.3)';
-            ctx.fillRect(startX, 18, barW, plotH);
-          }
-        }
-
-        // Draw dotted RMS threshold line
-        var threshNorm = Math.min(1.0, _vadThreshold / _chartYMax);
-        var threshY = plotBase - threshNorm * plotH;
-        ctx.strokeStyle = '#f43f5e';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([5, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, threshY);
-        ctx.lineTo(w, threshY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Trace 1: Local Raw Pre-VAD Microphone (Green Dotted Line)
-        ctx.strokeStyle = 'rgba(34, 197, 94, 0.95)';
-        ctx.lineWidth = 2.0;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        for (var i = 0; i < _rawHistory.length; i++) {
-          var norm = Math.min(1.0, _rawHistory[i] / _chartYMax);
-          var py = plotBase - norm * plotH;
-          var px = (i / (_rawHistory.length - 1)) * w;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Trace 1: Server Downlink Transmission (dim dotted cyan line, network arrival timestamps)
-        ctx.strokeStyle = '#22d3ee';
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = 0.4;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        for (var i = 0; i < _agentNetworkHistory.length; i++) {
-          var normN = Math.min(1.0, _agentNetworkHistory[i] / _chartYMax);
-          var pyN = plotBase - normN * plotH;
-          var pxN = (i / (_agentNetworkHistory.length - 1)) * w;
-          if (i === 0) ctx.moveTo(pxN, pyN);
-          else ctx.lineTo(pxN, pyN);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1.0;
-
-        // Trace 2: Local Speaker Playback (solid bright cyan line, actual time-domain acoustic output)
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        for (var i = 0; i < _agentHistory.length; i++) {
-          var normC = Math.min(1.0, _agentHistory[i] / _chartYMax);
-          var pyC = plotBase - normC * plotH;
-          var pxC = (i / (_agentHistory.length - 1)) * w;
-          if (i === 0) ctx.moveTo(pxC, pyC);
-          else ctx.lineTo(pxC, pyC);
-        }
-        ctx.stroke();
-
-        // Trace 2: Backend Delayed Uplink Stream (Purple Long-Dashed Line drawn on top)
-        ctx.strokeStyle = '#a855f7';
-        ctx.lineWidth = 3.5;
-        ctx.setLineDash([8, 3]);
-        ctx.beginPath();
-        for (var i = 0; i < _backendHistory.length; i++) {
-          var normB = Math.min(1.0, _backendHistory[i] / _chartYMax);
-          var pyB = plotBase - normB * plotH;
-          var pxB = (i / (_backendHistory.length - 1)) * w;
-          if (i === 0) ctx.moveTo(pxB, pyB);
-          else ctx.lineTo(pxB, pyB);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Threshold annotation
-        ctx.fillStyle = '#f43f5e';
-        ctx.font = '11px monospace';
-        ctx.fillText('--- THRESHOLD (' + _vadThreshold.toFixed(3) + ') ---', w - 210, threshY - 4);
-
-        // Top Status Badge & 3-Color Legend
-        var stateColors = { idle: '#64748b', listening: '#22c55e', speaking: '#38bdf8' };
-        var stateEmoji = { idle: '⏸', listening: '🟢', speaking: '🔊' };
-        ctx.fillStyle = stateColors[_assistantState] || '#64748b';
-        ctx.font = 'bold 12px monospace';
-        var badgeLabel = (_assistantState === 'listening' && _vadSpeechState === 1) ? '🟢🗣️ RECORDING' : ((stateEmoji[_assistantState] || '') + ' ' + _assistantState.toUpperCase());
-        ctx.fillText(badgeLabel + (_turnCount > 0 ? ' #' + _turnCount : ''), 12, 16);
-
-        ctx.font = '10px monospace';
-        ctx.fillStyle = '#22c55e';
-        ctx.fillText('🟢 MIC:' + liveRms.toFixed(3), 110, 14);
-
-        ctx.fillStyle = _serverAckRms > 0 ? '#c084fc' : '#64748b';
-        ctx.fillText('🟣 UPLINK:' + _serverAckRms.toFixed(3), 190, 14);
-
-        ctx.fillStyle = agentRms > 0 ? '#38bdf8' : '#475569';
-        ctx.fillText('🔵 AGENT:' + agentRms.toFixed(3), 275, 14);
-
-        requestAnimationFrame(drawVadChart);
-      }
-      requestAnimationFrame(drawVadChart);
+    window.addEventListener('DOMContentLoaded', function() {
+      initLedStrips();
+    });
   </script>
+  <script src="ui/store.js"></script>
+  <script src="ui/log_interceptor.js"></script>
+  <script src="ui/websocket_mgr.js"></script>
+  <script src="ui/ble_bridge.js"></script>
+  <script src="ui/radar.js"></script>
+  <script src="ui/camera_bridge.js"></script>
+  <script src="ui/audio_pipeline.js"></script>
+  <script src="ui/oscilloscope.js"></script>
   {{{ SCRIPT }}}
 </body>
 </html>

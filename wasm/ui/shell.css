@@ -1,0 +1,29 @@
+body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }
+.container { max-width: 1140px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 24px; }
+.header { font-size: 22px; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 12px; }
+.deck-wrap { display: grid; grid-template-columns: repeat(3, 350px); justify-content: center; align-items: start; gap: 20px; width: 100%; }
+.deck-column { display: flex; flex-direction: column; gap: 20px; width: 350px; }
+.robot-frame { background: #1e293b; padding: 18px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); border: 2px solid #334155; width: 100%; box-sizing: border-box; }
+.radar-frame { border: 2px solid #00ff66 !important; box-shadow: 0 0 20px rgba(0,255,102,0.15) !important; background: #02180a !important; }
+.ble-frame { border: 2px solid #38bdf8 !important; box-shadow: 0 0 20px rgba(56,189,248,0.15) !important; background: #081b2e !important; }
+.frame-title { font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; text-align: center; }
+canvas#display { width: 280px; height: 210px; background: #000; border-radius: 12px; cursor: pointer; display: block; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+canvas#radar { width: 280px; height: 210px; background: #010e05; border-radius: 12px; display: block; margin: 0 auto; box-shadow: inset 0 0 16px rgba(0,255,102,0.2); border: 1px solid #005522; }
+.ble-controls { display: flex; flex-direction: column; gap: 10px; }
+.ble-btn { padding: 10px; border-radius: 8px; border: none; font-weight: 600; font-size: 13px; cursor: pointer; transition: transform 0.1s, opacity 0.2s; }
+.ble-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+.btn-webbt { background: #38bdf8; color: #0f172a; }
+.btn-handshake { background: #facc15; color: #0f172a; }
+.btn-wifi { background: #4ade80; color: #0f172a; }
+.btn-status { background: #818cf8; color: #ffffff; }
+.wifi-form { display: flex; flex-direction: column; gap: 6px; }
+.led-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px; background: #0b0f19; border-radius: 8px; border: 1px solid #1e293b; }
+.led-pixel { width: 10px; height: 17px; border-radius: 3px; background: #1e293b; box-shadow: 0 0 4px rgba(0,0,0,0.5); transition: all 0.15s ease; }
+.wifi-form input { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px; color: #e2e8f0; font-size: 12px; }
+.ble-status-box { margin-top: 12px; background: #0f172a; border-radius: 8px; border: 1px dashed #38bdf8; padding: 10px; font-size: 11px; font-family: monospace; color: #7dd3fc; word-break: break-all; }
+.log-pane { width: 100%; background: #1e293b; border-radius: 16px; border: 2px solid #334155; padding: 16px; font-family: monospace; font-size: 12px; height: 340px; overflow-y: auto; color: #94a3b8; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
+.log-entry { margin: 4px 0; border-bottom: 1px solid #0f172a; padding-bottom: 2px; }
+.log-info { color: #38bdf8; }
+.log-radar { color: #00ff66; font-weight: 600; }
+.log-servo { color: #facc15; }
+.log-ble { color: #38bdf8; font-weight: 700; }
