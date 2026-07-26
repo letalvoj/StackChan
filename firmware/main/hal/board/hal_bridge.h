@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#ifndef __EMSCRIPTEN__
 #include "stackchan_camera.h"
+#include <driver/i2c_master.h>
+#endif
 #include <cstdint>
 #include <lvgl.h>
-#include <driver/i2c_master.h>
 #include <string_view>
 
 namespace hal_bridge {
@@ -53,8 +55,10 @@ bool is_xiaozhi_idle();
 XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 
+#ifndef __EMSCRIPTEN__
 i2c_master_bus_handle_t board_get_i2c_bus();
 StackChanCamera* board_get_camera();
+#endif
 int board_get_battery_level();
 bool board_is_battery_charging();
 void board_set_backlight_brightness(uint8_t brightness, bool permanent = false);

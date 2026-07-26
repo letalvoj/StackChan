@@ -6,7 +6,7 @@ set(PROJECT_VER "1.4.3")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 
 # Add this line to disable the specific warning
-add_compile_options(-Wno-missing-field-initializers)
+add_compile_options(-Wno-missing-field-initializers -Wno-error=maybe-uninitialized -Wno-maybe-uninitialized)
 
 # Auto-load a local sdkconfig overlay (git-ignored) when present. Lets
 # self-hosted / custom deployments pin CONFIG_STACKCHAN_SERVER_URL,
