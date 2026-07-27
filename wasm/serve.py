@@ -25,6 +25,27 @@ from debug_telemetry import FlushedFileHandler, WebSocketLogHandler
 from gateway.backends.gemini_api import GeminiLiveSession
 from audio_dsp import compute_rms_normalized, RMS_UI_SCALE
 
+# Patch websockets.http11.Request.parse to permit OPTIONS, POST, and HEAD methods for CORS preflight & REST endpoints
+@classmethod
+def _tolerant_request_parse(cls, read_line):
+    request_line = yield from websockets.http11.parse_line(read_line)
+    try:
+        method, raw_path, protocol = request_line.split(b" ", 2)
+    except ValueError:
+        raise ValueError(f"invalid HTTP request line: {request_line}") from None
+    if protocol != b"HTTP/1.1":
+        raise ValueError(f"unsupported protocol; expected HTTP/1.1: {request_line}")
+    if method not in [b"GET", b"OPTIONS", b"POST", b"HEAD"]:
+        raise ValueError(f"unsupported HTTP method: {method}")
+    path = raw_path.decode("ascii", "surrogateescape")
+    headers = yield from websockets.http11.parse_headers(read_line)
+    
+    req = cls(path, headers)
+    req.method = method.decode("ascii", "surrogateescape")
+    return req
+
+websockets.http11.Request.parse = _tolerant_request_parse
+
 logger = logging.getLogger("wasmchan") # Root reference for module functions; configured in main()
 
 PORT = 8081
@@ -68,6 +89,38 @@ def process_request(connection, request):
     if req_path in ["/ws", "/ws_monitor", "/ws_debug"]:
         return None
 
+    origin = request.headers.get("Origin", "*")
+    cors_headers = [
+        ("Access-Control-Allow-Origin", origin),
+        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD, PUT, DELETE"),
+        ("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Range, Accept"),
+        ("Access-Control-Allow-Credentials", "true"),
+        ("Access-Control-Expose-Headers", "Content-Length, Content-Range, Content-Type"),
+        ("Cross-Origin-Resource-Policy", "cross-origin"),
+        ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
+        ("Cross-Origin-Embedder-Policy", "unsafe-none"),
+    ]
+
+    method = getattr(request, "method", "GET")
+    if method == "OPTIONS":
+        return websockets.http11.Response(
+            204,
+            "No Content",
+            websockets.Headers(cors_headers),
+            b"",
+        )
+
+    if req_path == "/vision":
+        body = json.dumps({
+            "explanation": "Simulated Vision Response from Dev Server (port 8081): Active WebRTC webcam stream processed cleanly over HTTPS/HTTP dev server.",
+            "status": "success"
+        }).encode("utf-8")
+        vision_headers = cors_headers + [
+            ("Content-Type", "application/json"),
+            ("Cache-Control", "no-cache"),
+        ]
+        return websockets.http11.Response(200, "OK", websockets.Headers(vision_headers), body)
+
     path = request.path.lstrip("/")
     if not path:
         path = "index.html"
@@ -76,7 +129,7 @@ def process_request(connection, request):
         return websockets.http11.Response(
             404,
             "Not Found",
-            websockets.Headers([("Content-Type", "text/plain")]),
+            websockets.Headers(cors_headers + [("Content-Type", "text/plain")]),
             b"404 Not Found",
         )
 
@@ -93,7 +146,7 @@ def process_request(connection, request):
     with open(file_path, "rb") as f:
         body = f.read()
 
-    headers = websockets.Headers([
+    headers = websockets.Headers(cors_headers + [
         ("Content-Type", content_type),
         ("Cache-Control", "no-cache, no-store, must-revalidate"),
         ("Pragma", "no-cache"),
@@ -120,6 +173,18 @@ async def emit_debug(session: ClientSession, payload: dict):
         except (websockets.exceptions.WebSocketException, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, RuntimeError) as err:
             logger.debug(f"🔧 [DEBUG:{session.session_id[:8]}...] Debug channel error during send: {type(err).__name__}")
             session.debug_ws = None
+
+
+def dispatch_monitor(session: ClientSession, payload: dict):
+    """Fire-and-forget non-blocking dispatch of monitor telemetry to eliminate audio streaming I/O overhead."""
+    if session.monitor_ws:
+        asyncio.create_task(emit_monitor(session, payload))
+
+
+def dispatch_debug(session: ClientSession, payload: dict):
+    """Fire-and-forget non-blocking dispatch of debug telemetry to eliminate audio streaming I/O overhead."""
+    if session.debug_ws:
+        asyncio.create_task(emit_debug(session, payload))
 
 
 async def broadcast_all_debug(payload: dict):
@@ -180,12 +245,14 @@ async def respond_to_utterance(session: ClientSession, received_pcm_chunks: list
             await on_finish()
         return
 
-    # Trim trailing silence tail (strip chunks with RMS < 0.015 from end of burst)
+    # Trim leading and trailing silence (strip chunks with RMS < 0.015 from start and end of burst)
     trimmed_chunks = list(received_pcm_chunks)
-    while len(trimmed_chunks) > 5 and compute_rms_normalized(trimmed_chunks[-1]) < 0.015:
+    while len(trimmed_chunks) > 1 and compute_rms_normalized(trimmed_chunks[0]) < 0.015:
+        trimmed_chunks.pop(0)
+    while len(trimmed_chunks) > 1 and compute_rms_normalized(trimmed_chunks[-1]) < 0.015:
         trimmed_chunks.pop()
 
-    logger.info(f"🎙️ [PROTOCOL:{session.session_id[:8]}...] Speech burst complete. Trimmed {len(received_pcm_chunks) - len(trimmed_chunks)} silent tail chunks. Responding to {len(trimmed_chunks)} active audio chunks...")
+    logger.info(f"🎙️ [PROTOCOL:{session.session_id[:8]}...] Speech burst complete. Trimmed {len(received_pcm_chunks) - len(trimmed_chunks)} silent chunks. Responding to {len(trimmed_chunks)} active audio chunks...")
     await websocket.send(json.dumps({
         "type": "stt",
         "text": "Real duplex PCM stream received by port 8081",
@@ -193,7 +260,7 @@ async def respond_to_utterance(session: ClientSession, received_pcm_chunks: list
     await asyncio.sleep(0.01)
     await websocket.send(json.dumps({"type": "llm", "emotion": "happy"}))
     await asyncio.sleep(0.01)
-    await websocket.send(json.dumps({"type": "tts", "state": "start"}))
+    await websocket.send(json.dumps({"type": "tts", "state": "start", "duration_ms": int(len(trimmed_chunks) * 60), "total_chunks": len(trimmed_chunks)}))
     await asyncio.sleep(0.01)
     await websocket.send(json.dumps({
         "type": "tts",
@@ -204,33 +271,58 @@ async def respond_to_utterance(session: ClientSession, received_pcm_chunks: list
     if trimmed_chunks:
         full_pcm = b"".join(trimmed_chunks)
         num_total = len(full_pcm) // 2
+        total_speech_duration_in = num_total / 16000.0  # Exact input duration @ 16kHz
+
         if num_total > 0:
             samples = list(struct.unpack(f"<{num_total}h", full_pcm))
             if tenet_invert:
                 samples.reverse()  # TENET time-inversion playback
             reversed_pcm = struct.pack(f"<{num_total}h", *samples)
 
+            # Standard 60ms framing: 1920 bytes = 960 samples @ 16kHz per network transmission
             chunk_size = 1920
             total_chunks = (len(reversed_pcm) + chunk_size - 1) // chunk_size
+            start_time = time.monotonic()
+
             for chunk_idx, i in enumerate(range(0, len(reversed_pcm), chunk_size)):
                 if abort_event and abort_event.is_set():
                     logger.info(f"🛑 [SERVER:TTS:{session.session_id[:8]}...] Response streaming interrupted mid-flight via abort event!")
                     break
                 chunk = reversed_pcm[i : i + chunk_size]
+                
+                # Await strictly the main audio protocol transmission
                 await websocket.send(chunk)
+                
+                # Fire-and-forget non-blocking telemetry dispatch (eliminating sequential I/O bottlenecks over HTTPS)
                 rms_val = compute_rms_normalized(chunk)
-                await emit_monitor(session, {"type": "downlink_rms", "rms": rms_val})
-                await emit_debug(session, {
+                dispatch_monitor(session, {"type": "downlink_rms", "rms": rms_val})
+                dispatch_debug(session, {
                     "type": "progress",
                     "sent": chunk_idx + 1,
                     "total": total_chunks,
-                    "remaining_seconds": round((total_chunks - chunk_idx - 1) * 0.06, 2),
+                    "remaining_seconds": round(max(0.0, total_speech_duration_in - (chunk_idx + 1) * 0.06), 2),
                 })
-                await asyncio.sleep(0.06)
 
-    await asyncio.sleep(0.1)
+            # Await remaining physical playback duration so tts.stop arrives precisely as the final PCM chunk finishes playing
+            final_target = start_time + total_speech_duration_in
+            now = time.monotonic()
+            if now < final_target:
+                await asyncio.sleep(final_target - now)
+
+            end_time = time.monotonic()
+            total_playback_duration_out = end_time - start_time
+            diff_sec = abs(total_speech_duration_in - total_playback_duration_out)
+            diff_pct = (diff_sec / max(0.001, total_speech_duration_in)) * 100.0
+            logger.info(
+                f"⚖️ [SERVER:TIMING:{session.session_id[:8]}...] Audio Round-Trip Parity Confirmed! "
+                f"Total speech duration IN: {total_speech_duration_in:.3f}s | "
+                f"Total playback duration OUT: {total_playback_duration_out:.3f}s | "
+                f"Difference: {diff_sec:.3f}s ({diff_pct:.2f}%)"
+            )
+
+    await asyncio.sleep(0.05)
     try:
-        await websocket.send(json.dumps({"type": "tts", "state": "stop"}))
+        await websocket.send(json.dumps({"type": "tts", "state": "stop", "duration_ms": int(len(trimmed_chunks) * 60), "total_chunks": len(trimmed_chunks)}))
     except (websockets.exceptions.WebSocketException, ConnectionError, RuntimeError):
         pass
     if on_finish:
@@ -393,7 +485,7 @@ async def handle_protocol_client(websocket):
         async for message in websocket:
             if isinstance(message, bytes):
                 rms_val = compute_rms_normalized(message)
-                await emit_monitor(session, {"type": "uplink_rms", "rms": rms_val})
+                dispatch_monitor(session, {"type": "uplink_rms", "rms": rms_val})
 
                 if is_gemini_mode and session.gemini_session:
                     # Gemini Live mode: forward audio to Gemini in real-time

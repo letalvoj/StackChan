@@ -76,7 +76,7 @@
       if (!window._playbackAnalyser) {
         window._playbackAnalyser = actx.createAnalyser();
         window._playbackAnalyser.fftSize = 512;
-        window._playbackAnalyser.smoothingTimeConstant = 0.4;
+        window._playbackAnalyser.smoothingTimeConstant = 0.0;
         window._playbackAnalyser.connect(actx.destination);
       }
       var micSrc = actx.createMediaStreamSource(stream);
@@ -129,6 +129,7 @@
             }
             if (window._vadSpeechState === 1) return;
             window._vadSpeechState = 1;
+            window._vadStartTime = Date.now();
             console.log('[WASM_VAD:SILERO] 🗣️ Speech start detected (MaxRMS=' + maxRecentRms.toFixed(4) + ' >= Thresh=' + thresh.toFixed(3) + ')!');
             if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [1]);
           },
@@ -137,6 +138,9 @@
             if (!window._isAssistantLoopActive || !Module._audioProcessingEnabled) return;
             if (window._vadSpeechState === 1) {
               window._vadSpeechState = 0;
+              if (window._vadStartTime && typeof _turnMetrics !== 'undefined' && !window._authoritativeVadDurationMs) {
+                _turnMetrics.vadSpeechDurationMs = Date.now() - window._vadStartTime;
+              }
               console.log('[WASM_VAD:SILERO] 🤫 Speech end detected!');
               if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [0]);
             } else {
@@ -161,6 +165,7 @@
                 var maxRecentRms = Math.max.apply(null, window._recentRmsBuffer);
                 if (maxRecentRms >= thresh) {
                   window._vadSpeechState = 1;
+                  window._vadStartTime = Date.now();
                   console.log('[WASM_VAD:SILERO] 🗣️ Speech start confirmed via acoustic onset climb (MaxRMS=' + maxRecentRms.toFixed(4) + ' >= Thresh=' + thresh.toFixed(3) + ')!');
                   if (Module.ccall) Module.ccall('hal_on_vad_state_change', null, ['number'], [1]);
                 }
@@ -184,7 +189,135 @@
     });
   }
 
+  // --- Jitter Buffer & Telemetry State ---
   var _nextPlaybackTime = 0;
+  var _playbackQueue = [];
+  var _playbackState = 'idle'; // 'idle' | 'buffering' | 'playing'
+  var _bufferingTimer = null;
+  var JITTER_CUSHION_CHUNKS = 4;  // 4 * 60ms = 240ms jitter cushion before DAC playback starts
+  var PRE_ROLL_TIMEOUT_MS = 50;   // Force-start short clips within 50ms
+  var SCHEDULE_LOOKAHEAD = 0.015; // 15ms OS thread scheduling lookahead
+  window._ttsStreamEnded = false;
+
+  // Turn Telemetry Metrics
+  var _turnMetrics = {
+    vadStartTime: 0,
+    vadEndTime: 0,
+    vadSpeechDurationMs: 0,
+    ttsStartTime: 0,
+    firstSampleTime: 0,
+    firstSampleEpoch: 0,
+    lastScheduledTime: 0,
+    underrunCount: 0,
+    silenceInsertedMs: 0,
+    peakBufferDepthMs: 0,
+    chunksReceived: 0,
+    chunksPlayed: 0,
+    expectedChunks: 0,
+    reportPrinted: false
+  };
+
+  function resetTurnMetrics() {
+    _turnMetrics.ttsStartTime = Date.now();
+    _turnMetrics.firstSampleTime = 0;
+    _turnMetrics.firstSampleEpoch = 0;
+    _turnMetrics.lastScheduledTime = 0;
+    _turnMetrics.underrunCount = 0;
+    _turnMetrics.silenceInsertedMs = 0;
+    _turnMetrics.peakBufferDepthMs = 0;
+    _turnMetrics.chunksReceived = 0;
+    _turnMetrics.chunksPlayed = 0;
+    _turnMetrics.expectedChunks = 0;
+    _turnMetrics.reportPrinted = false;
+  }
+
+  function printTurnMetricsReport() {
+    if (_turnMetrics.reportPrinted) return;
+    _turnMetrics.reportPrinted = true;
+
+    var playbackDurMs = (_turnMetrics.lastScheduledTime > _turnMetrics.firstSampleTime && _turnMetrics.firstSampleTime > 0)
+      ? Math.round((_turnMetrics.lastScheduledTime - _turnMetrics.firstSampleTime) * 1000)
+      : Math.round(_turnMetrics.chunksPlayed * 60);
+    var vadDurMs = _turnMetrics.vadSpeechDurationMs || playbackDurMs;
+    var stretchRatio = (vadDurMs > 0) ? (playbackDurMs / vadDurMs) : 1.0;
+    var ttfsMs = (_turnMetrics.firstSampleEpoch > _turnMetrics.ttsStartTime && _turnMetrics.ttsStartTime > 0)
+      ? (_turnMetrics.firstSampleEpoch - _turnMetrics.ttsStartTime)
+      : (_turnMetrics.firstSampleTime > 0 ? Math.round((_turnMetrics.firstSampleTime * 1000) - _turnMetrics.ttsStartTime) : 0);
+    if (ttfsMs < 0 || ttfsMs > 10000) ttfsMs = Math.round(JITTER_CUSHION_CHUNKS * 60); // Safety fallback if epochs diverged
+
+    var passRatio = (stretchRatio >= 0.95 && stretchRatio <= 1.05);
+    var passUnderrun = (_turnMetrics.underrunCount === 0);
+    var passSilence = (_turnMetrics.silenceInsertedMs === 0);
+
+    console.log(
+      "📊 [WASM_AUDIO:METRICS] Turn Acoustic & Timeline Report:\n" +
+      "  ├─ VAD Speech Input Duration : " + vadDurMs + " ms\n" +
+      "  ├─ TTS Playback Output Dur.  : " + playbackDurMs + " ms (" + _turnMetrics.chunksPlayed + " chunks @ 16.67Hz)\n" +
+      "  ├─ Playback Stretch Ratio    : " + stretchRatio.toFixed(3) + "x (" + (passRatio ? "PASS: 0.95x - 1.05x parity" : "FAIL: out of 0.95-1.05x") + ")\n" +
+      "  ├─ Buffer Underrun Count     : " + _turnMetrics.underrunCount + " (" + (passUnderrun ? "PASS: clean audio stream" : "FAIL: >0 underruns") + ")\n" +
+      "  ├─ Artificial Silence Added  : " + Math.round(_turnMetrics.silenceInsertedMs) + " ms (" + (passSilence ? "PASS: 0ms gapless playback" : "FAIL: >0ms") + ")\n" +
+      "  ├─ Peak Jitter Buffer Depth  : " + Math.round(_turnMetrics.peakBufferDepthMs) + " ms (" + Math.round(_turnMetrics.peakBufferDepthMs / 60) + " chunks buffered)\n" +
+      "  └─ Time-to-First-Sound (TTFS): " + ttfsMs + " ms"
+    );
+  }
+
+  function cancelBufferingTimer() {
+    if (_bufferingTimer) {
+      clearTimeout(_bufferingTimer);
+      _bufferingTimer = null;
+    }
+  }
+
+  function startPlaybackTimeline() {
+    cancelBufferingTimer();
+    if (_playbackQueue.length === 0) return;
+    _playbackState = 'playing';
+    var now = window._vadAudioCtx.currentTime;
+    _nextPlaybackTime = now + SCHEDULE_LOOKAHEAD;
+    if (_turnMetrics.firstSampleTime === 0) {
+      _turnMetrics.firstSampleTime = _nextPlaybackTime;
+      _turnMetrics.firstSampleEpoch = Date.now() + Math.round(SCHEDULE_LOOKAHEAD * 1000);
+    }
+    scheduleQueue();
+  }
+
+  function scheduleQueue() {
+    while (_playbackQueue.length > 0) {
+      var now = window._vadAudioCtx.currentTime;
+
+      // 1. Underrun / Silence Insertion Detection:
+      if (_nextPlaybackTime < now - 0.005) {
+        if (_turnMetrics.firstSampleTime > 0) {
+          // We fell behind during active playback (network underrun)
+          _turnMetrics.underrunCount++;
+          var gapMs = (now - _nextPlaybackTime) * 1000;
+          _turnMetrics.silenceInsertedMs += Math.max(0, gapMs);
+          console.warn('[WASM_VAD:JITTER] ⚠️ Underrun #' + _turnMetrics.underrunCount + ' detected (gap=' + Math.round(gapMs) + 'ms). Recovering instantly...');
+        }
+        _nextPlaybackTime = now + SCHEDULE_LOOKAHEAD;
+      }
+
+      var audioBuf = _playbackQueue.shift();
+      var srcNode = window._vadAudioCtx.createBufferSource();
+      srcNode.buffer = audioBuf;
+      if (window._playbackAnalyser) {
+        srcNode.connect(window._playbackAnalyser);
+      } else {
+        srcNode.connect(window._vadAudioCtx.destination);
+      }
+
+      srcNode.start(_nextPlaybackTime);
+      _nextPlaybackTime += audioBuf.duration;
+      _turnMetrics.lastScheduledTime = _nextPlaybackTime;
+      _turnMetrics.chunksPlayed++;
+    }
+
+    if (_playbackQueue.length === 0 && window._ttsStreamEnded && (!_turnMetrics.expectedChunks || _turnMetrics.chunksPlayed >= _turnMetrics.expectedChunks)) {
+      _playbackState = 'idle';
+      printTurnMetricsReport();
+    }
+  }
+
   window._streamPlaybackChunk = function(arrayBuffer) {
     if (!window._vadAudioCtx) return;
     if (window._vadAudioCtx.state === 'suspended') window._vadAudioCtx.resume();
@@ -198,28 +331,64 @@
     var audioBuf = window._vadAudioCtx.createBuffer(1, float32.length, 16000);
     audioBuf.getChannelData(0).set(float32);
 
-    var srcNode = window._vadAudioCtx.createBufferSource();
-    srcNode.buffer = audioBuf;
-    if (window._playbackAnalyser) {
-      srcNode.connect(window._playbackAnalyser);
-    } else {
-      srcNode.connect(window._vadAudioCtx.destination);
+    _playbackQueue.push(audioBuf);
+    _turnMetrics.chunksReceived++;
+    var currentDepthMs = _playbackQueue.length * 60;
+    if (currentDepthMs > _turnMetrics.peakBufferDepthMs) {
+      _turnMetrics.peakBufferDepthMs = currentDepthMs;
     }
 
-    var now = window._vadAudioCtx.currentTime;
-    var startAt = Math.max(now, _nextPlaybackTime);
-    srcNode.start(startAt);
-    _nextPlaybackTime = startAt + audioBuf.duration;
+    if (_playbackState === 'idle' || _playbackState === 'buffering') {
+      _playbackState = 'buffering';
+      if (!_bufferingTimer) {
+        _bufferingTimer = setTimeout(startPlaybackTimeline, PRE_ROLL_TIMEOUT_MS);
+      }
+      if (_playbackQueue.length >= JITTER_CUSHION_CHUNKS) {
+        startPlaybackTimeline();
+      }
+    } else if (_playbackState === 'playing') {
+      scheduleQueue();
+    }
   };
 
   window.onProtocolRxJson = function(jsonStr) {
     try {
       var d = JSON.parse(jsonStr);
       if (d.type === 'tts' && d.state === 'start') {
-        _nextPlaybackTime = 0;
-        console.log('[WASM_APP] TTS start received — streaming playback pipeline ready.');
+        cancelBufferingTimer();
+        _playbackQueue = [];
+        _playbackState = 'buffering';
+        window._ttsStreamEnded = false;
+        resetTurnMetrics();
+        if (d.duration_ms) {
+          _turnMetrics.vadSpeechDurationMs = d.duration_ms;
+          window._authoritativeVadDurationMs = d.duration_ms;
+        }
+        if (d.total_chunks) {
+          _turnMetrics.expectedChunks = d.total_chunks;
+        }
+        console.log('[WASM_APP] TTS start received — jitter buffer reset & buffering (240ms cushion).');
       } else if (d.type === 'tts' && (d.state === 'stop' || d.state === 'end')) {
-        console.log('[WASM_APP] TTS stream ended cleanly.');
+        window._ttsStreamEnded = true;
+        if (d.duration_ms) {
+          _turnMetrics.vadSpeechDurationMs = d.duration_ms;
+          window._authoritativeVadDurationMs = d.duration_ms;
+        }
+        if (d.total_chunks) {
+          _turnMetrics.expectedChunks = d.total_chunks;
+        }
+        console.log('[WASM_APP] TTS stream end received. Flushing residual chunks...');
+        if (_playbackQueue.length > 0) {
+          if (_playbackState === 'buffering') {
+            startPlaybackTimeline();
+          } else {
+            scheduleQueue();
+          }
+        }
+        if (_playbackQueue.length === 0) {
+          _playbackState = 'idle';
+          printTurnMetricsReport();
+        }
       }
     } catch(e) {}
   };

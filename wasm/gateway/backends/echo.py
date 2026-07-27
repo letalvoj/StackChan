@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import struct
+import time
 
 from audio_dsp import compute_rms_normalized, RMS_UI_SCALE
 from gateway.session import SessionState
@@ -21,37 +22,48 @@ async def echo_respond(
     """Echo backend: reverse received PCM audio and stream it back.
 
     Steps:
-        1. Trim trailing silence (RMS < 0.015)
+        1. Trim leading and trailing silence (RMS < 0.015)
         2. Reverse samples (tenet-style echo)
-        3. Send protocol messages: stt, llm, tts start, sentence_start
-        4. Stream reversed audio in 1920-byte chunks at 60ms intervals
-        5. Send tts stop
+        3. Send protocol messages: stt, llm, tts start (with duration & chunks), sentence_start
+        4. Stream reversed audio in a rapid burst without blocking sleeps
+        5. Await exact physical acoustic duration before sending tts stop
     """
     sid = session.session_id[:8]
 
     if not received_chunks:
         return
 
-    # Trim trailing silence
+    # Trim leading and trailing silence (strip chunks with RMS < 0.015 from start and end of burst)
     trimmed = list(received_chunks)
-    while len(trimmed) > 5 and compute_rms_normalized(trimmed[-1]) < 0.015:
+    while len(trimmed) > 1 and compute_rms_normalized(trimmed[0]) < 0.015:
+        trimmed.pop(0)
+    while len(trimmed) > 1 and compute_rms_normalized(trimmed[-1]) < 0.015:
         trimmed.pop()
 
     trimmed_count = len(received_chunks) - len(trimmed)
     logger.info(
-        "[ECHO:%s...] Speech burst complete. Trimmed %d silent tail chunks. "
+        "[ECHO:%s...] Speech burst complete. Trimmed %d silent chunks. "
         "Responding to %d active audio chunks.",
         sid,
         trimmed_count,
         len(trimmed),
     )
 
+    total_speech_duration = len(trimmed) * 0.06
+
     # Send protocol sequence
     await transport.send(json.dumps({"type": "stt", "text": "Echo received"}))
     await asyncio.sleep(0.01)
     await transport.send(json.dumps({"type": "llm", "emotion": "happy"}))
     await asyncio.sleep(0.01)
-    await transport.send(json.dumps({"type": "tts", "state": "start"}))
+    await transport.send(
+        json.dumps({
+            "type": "tts",
+            "state": "start",
+            "duration_ms": int(total_speech_duration * 1000),
+            "total_chunks": len(trimmed),
+        })
+    )
     await asyncio.sleep(0.01)
     await transport.send(
         json.dumps({
@@ -71,11 +83,24 @@ async def echo_respond(
             reversed_pcm = struct.pack(f"<{num_total}h", *samples)
 
             chunk_size = 1920  # 960 samples * 2 bytes
+            start_time = time.monotonic()
             for i in range(0, len(reversed_pcm), chunk_size):
                 chunk = reversed_pcm[i : i + chunk_size]
                 await transport.send(chunk)
-                await asyncio.sleep(0.06)
 
-    await asyncio.sleep(0.1)
-    await transport.send(json.dumps({"type": "tts", "state": "stop"}))
+            final_target = start_time + total_speech_duration
+            now = time.monotonic()
+            if now < final_target:
+                await asyncio.sleep(final_target - now)
+
+    await asyncio.sleep(0.05)
+    await transport.send(
+        json.dumps({
+            "type": "tts",
+            "state": "stop",
+            "duration_ms": int(total_speech_duration * 1000),
+            "total_chunks": len(trimmed),
+        })
+    )
     logger.info("[ECHO:%s...] Echo response complete.", sid)
+
