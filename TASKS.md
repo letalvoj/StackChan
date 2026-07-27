@@ -6,15 +6,21 @@ Captured during architectural design sessions. Items are roughly priority-ordere
 
 ## P0 — Active / In Progress
 
-- [x] **UsbProtocol over ttyACM0** — `Protocol` subclass over TinyUSB CDC-ACM. Enumerates,
-      handshakes, SLIP framing, selected by `CONFIG_CONNECTION_TYPE_USB` (on by default).
-      See `ARCHITECTURE.md` §5. **Audio is not yet working end to end** — see next item.
+- [x] **USB transport** — Superseded by CDC-**NCM**: the device is a USB network adapter
+      and runs the stock `WebsocketProtocol`, so there is no bespoke wire format at all.
+      `CONFIG_CONNECTION_TYPE_USB_NCM`, on by default. The older SLIP path remains
+      selectable as `CONFIG_CONNECTION_TYPE_USB_SLIP`. See `ARCHITECTURE.md` §5.
+      **Neither has been exercised against real hardware yet.**
+- [ ] **Bring up NCM on the physical device.** Confirm the host enumerates `usb0`, takes
+      a DHCP lease of 192.168.7.2, and that the device's WebSocket reaches `serve.py`.
+      Check replug behaviour and that the adapter identity stays stable.
 - [ ] **Gateway must decode Opus** — The device advertises and sends Opus
       (`audio_service.cc` opens the Opus encoder unconditionally), but
       `wasm/gateway/backends/echo.py` and `gemini_api.py` unpack raw PCM16, and
       `ParseServerHello` never negotiates `format`. Audio is noise in both directions
       until this is closed. Python-side only; do **not** "fix" it by making the device
-      advertise PCM, which would fork it from real firmware behaviour.
+      advertise PCM, which would fork it from real firmware behaviour. Under NCM the
+      relevant server is `serve.py` (WebSocket), not the serial gateway.
 - [ ] **gateway.py** — Unified transport-agnostic server with pluggable backends (`--mode=echo`, `--mode=gemini-api`) and pluggable transports (`--serial`, `--tcp`, `--websocket`).
 
 ---
@@ -48,16 +54,17 @@ bypasses" rule in `AGENT.md`. Detail in `ARCHITECTURE.md` §4.4.
 
 ---
 
-## P0 — USB hardening (host side)
+## P2 — SLIP hardening (only if CONNECTION_TYPE_USB_SLIP is used)
 
-The device-side equivalents of these are fixed; the Python mirror is not.
+Deprioritised by the NCM switch: under NCM none of this code is on the path. The
+device-side equivalents are already fixed; the Python mirror is not.
 
 - [ ] **`wasm/gateway/transport.py` SLIP bugs.** The 64 KB cap is only checked on the
       unescaped path, so a stream of `DB DC` pairs grows the buffer without bound; and a
       malformed escape clears the buffer but keeps accumulating, delivering a corrupted
       frame's tail as a whole frame whose first byte is misread as the type.
 - [ ] **Add CRC-16/CCITT to the frame** and reuse `BinaryProtocol3` as the audio payload
-      header. Rationale and alternatives considered in `ARCHITECTURE.md` §5.3.
+      header. Rationale and alternatives considered in `ARCHITECTURE.md` §5.5.
 - [ ] **Round-trip test for the SLIP framer.** A property test over
       `encode`/`feed` would have caught both bugs above in minutes. The repo currently
       has exactly one test (`firmware/tests/motion_math_test.cpp`).
@@ -74,6 +81,12 @@ The device-side equivalents of these are fixed; the Python mirror is not.
       the layer that owns and polls those panels. Needs an owner inside the Xiaozhi
       runtime — and a route back to the launcher, which does not currently exist since
       `startXiaozhi()` never returns.
+- [ ] **3 remaining ESP32 warnings.** `_IO`/`_IOR`/`_IOW` redefinition in
+      `xiaozhi-esp32/main/display/lvgl_display/lvgl_display.cc`, which includes lwIP (via
+      `application.h`) and then esp_video's V4L2 headers. The `ioctl_compat.h` fix already
+      used in `stackchan.cc` applies directly, but the file is upstream-unmodified and
+      touching it adds drift. Only visible on a full rebuild -- an incremental build skips
+      that TU and reports zero.
 - [ ] **Drop the hardcoded Chinese cloud endpoint.** `sdkconfig` still carries
       `CONFIG_STACKCHAN_SERVER_URL="http://47.113.125.164:12800"`, which contradicts the
       stated goal of cloud independence.
@@ -84,7 +97,7 @@ The device-side equivalents of these are fixed; the Python mirror is not.
 
 - [ ] **Web Serial API browser simulation** — Create a WASM-side shim that connects to a local physical ESP32 via the browser's [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). This would let the WASM dashboard act as a live debug console for a real device, bridging browser UI controls directly to physical hardware without `socat` or SSH tunnels. *Complexity:* Moderate — requires Chrome-only API, async read/write streams, and TLV frame parsing in JavaScript.
 - [ ] **USB Composite Device: Mass Storage** — Expose ESP32 SPIFFS/LittleFS partition as a USB mass storage device alongside CDC protocol and console interfaces. Enables mounting the device's filesystem on the host machine for direct file inspection, config editing, and state tree visualization as a Unix file tree. *Dependency:* TinyUSB composite descriptor with CDC + MSC classes.
-- [ ] **`make all` top-level build target** — Create a root-level `Makefile` in `wasm-chan/` that orchestrates both `idf.py build` (ESP32 native) and `make build` (WASM/Emscripten) to catch cross-platform regressions early.
+- [x] **`make all` top-level build target** — Root `Makefile` builds both ESP32 and WASM, with `IDF_PATH` resolved rather than hardcoded.
 
 ---
 

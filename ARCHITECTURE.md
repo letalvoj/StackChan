@@ -1,7 +1,7 @@
 # wasm-chan Architecture
 
 Companion to `AGENT.md` (which states the rules). This document describes what is
-actually built, as of the USB CDC-ACM work. Where reality diverges from intent, that is
+actually built, as of the USB CDC-NCM work. Where reality diverges from intent, that is
 called out rather than smoothed over.
 
 ---
@@ -12,8 +12,8 @@ Three goals, in priority order:
 
 1. **A local sandbox** for developing StackChan without an ESP32 on the desk, and
    without breaking the ESP32 build.
-2. **No cloud dependence.** Local USB `/dev/ttyACM*` as a first-class transport
-   alongside WebSocket. No remote server required to hold a conversation.
+2. **No cloud dependence.** A local USB link as a first-class transport. No remote
+   server required to hold a conversation, and no internet at all.
 3. **Mock hardware strictly at the HAL layer.** The WASM build is the *real firmware*
    in a browser harness, not a reimplementation of it.
 
@@ -47,7 +47,7 @@ parent, sitting on a **local-only branch `wasm`** that is deliberately **never p
 
 ```
 origin  = https://github.com/78/xiaozhi-esp32.git   (upstream; not writable by us)
-wasm    = v2.2.4 + ApplicationCore extraction + UsbProtocol + CDC-ACM transport
+wasm    = v2.2.4 + ApplicationCore extraction + USB transport selection
 ```
 
 Those commits exist in exactly one place: this working copy. There is no remote that can
@@ -55,7 +55,7 @@ restore them.
 
 `fetch_repos.py` used to run `git checkout v2.2.4` unconditionally, which would silently
 revert the tree to vanilla upstream — the branch ref survived, but the build quietly lost
-ApplicationCore and UsbProtocol with no error. It now honours a `local_branch` key in
+ApplicationCore and the USB transport with no error. It now honours a `local_branch` key in
 `repos.json` and refuses to touch a checkout that has one.
 
 There is **no patch file any more**. `patches/xiaozhi-esp32.patch` was removed once every
@@ -148,83 +148,85 @@ The ESP32-S3 has **two** USB-capable peripherals, and the distinction matters:
 | Peripheral | Pins | Role here |
 |---|---|---|
 | USB-Serial-JTAG | GPIO19/20 | **Disabled.** Was the secondary log console. |
-| USB-OTG (TinyUSB) | GPIO19/20 | **Used.** CDC-ACM device → host sees `/dev/ttyACM*`. |
+| USB-OTG (TinyUSB) | GPIO19/20 | **Used.** CDC-NCM device -> host sees a network adapter. |
 
-They share the same pin pair, so only one can be routed at a time. USB-Serial-JTAG had to
-go: it is wired to the ESP_LOG console, and `console_write()` mirrors every log line onto
-it — the transport would have corrupted its own stream with its own logging. Logging
-continues on **UART0**.
+They share the same pin pair, so only one can be routed at a time. USB-Serial-JTAG had
+to go: it is wired to the ESP_LOG console, and `console_write()` mirrors every log line
+onto it. Logging continues on **UART0** -- note this means `idf.py monitor` needs the
+UART, not the USB cable.
 
-Note also that the S3 has a single OTG peripheral, so device mode is mutually exclusive
-with USB *host* mode. The `iot_usbh_*` components in the tree are host-side stacks for the
-cellular modem on other boards; this board does not use them, which is what frees OTG.
+The S3 has a single OTG peripheral, so device mode is mutually exclusive with USB *host*
+mode. The `iot_usbh_*` components in the tree are host-side stacks for the cellular modem
+on other boards; this board does not use them, which is what frees OTG.
 
-Selected by `CONFIG_CONNECTION_TYPE_USB`, **enabled by default** in
-`sdkconfig.defaults`. When on, `Application::InitializeProtocol()` picks `UsbProtocol`
-*before* consulting the OTA config — the point of this transport is to work with no
-network and no server configured.
+### 5.2 There is no wire format, and that is the point
 
-### 5.2 Wire format — what is actually implemented
+Transport is a three-way Kconfig choice:
 
-**RFC 1055 SLIP framing, with a one-byte type prefix. No length field, no checksum, no
-sequence numbers.**
+| `CONNECTION_TYPE_` | What it does |
+|---|---|
+| `DEFAULT` | MQTT or WebSocket from the OTA config. Stock upstream behaviour. |
+| `USB_NCM` | **Default.** USB network adapter; stock `WebsocketProtocol` runs over it. |
+| `USB_SLIP` | Legacy serial framing. Kept building, but superseded. |
+
+Under NCM the device is simply a host on a tiny network, so the protocol stack above the
+link is *unchanged from WiFi*:
 
 ```
-  0xC0  escape(type_byte)  escape(payload ...)  0xC0
-  └─────┴──────────────────┴────────────────────┴────  leading + trailing delimiter
-
-  type_byte:  0x00 = JSON control message (UTF-8)
-              0x01 = audio frame (Opus)
-
-  escapes:    0xC0  →  0xDB 0xDC     (END  → ESC ESC_END)
-              0xDB  →  0xDB 0xDD     (ESC  → ESC ESC_ESC)
+device ──WebSocket over TCP over USB-ethernet──> serve.py ──> backend
+         ↑ byte-identical to the WiFi path and to the WASM harness
 ```
 
-Implementations: `xiaozhi-esp32/main/protocols/usb_protocol.cc` (device) and
-`wasm/gateway/transport.py` (host). Both must change together.
+TCP supplies length framing, ordering, retransmission and integrity; WebSocket supplies
+message boundaries. None of that is ours, so none of it is ours to get wrong. This is
+also what makes the no-divergence rule tractable: **one** protocol implementation now
+covers WiFi, USB and the browser.
 
-Properties: self-delimiting, resynchronises after garbage (a leading `0xC0` on every frame
-means a corrupt frame costs you at most one message), and trivially decodable in Python.
-Worst case 2× overhead if every byte needs escaping — irrelevant for Opus at 16 kHz.
+### 5.3 Addressing and discovery
 
-Weaknesses: **no integrity check and no length.** A flipped bit inside a frame is
-undetectable; a corrupted Opus payload goes straight into the decoder.
+Fixed and self-contained. The device runs a **DHCP server** on the USB link and takes
+`192.168.7.1`; the host lands on `192.168.7.2`. Deliberately not `192.168.0/1.x`, so
+plugging the device in cannot shadow the host's real network. No router, no internet, no
+provisioning step. `StartNetwork()` overwrites the stored WebSocket URL from
+`CONFIG_USB_NET_WEBSOCKET_URL`, so a stale URL from a previous WiFi setup cannot send the
+device nowhere.
 
-### 5.3 On reusing the WebSocket wire layout
+**Discovery is the device dialling out, not the host scanning.** The sequence on plug-in:
 
-Worth stating clearly, because it is a natural assumption: **`BinaryProtocol2` /
-`BinaryProtocol3` in `protocols/protocol.h` are not a framing format.** They are packed
-payload *headers* (version, type, timestamp, `payload_size`) that ride inside a WebSocket
-message. WebSocket itself supplies the message boundaries and the length — that is what
-makes them mature and reusable.
+1. USB enumerates; the host kernel creates a network interface (`usb0`, `cdc_ncm` driver).
+2. The device's DHCP server leases the host its address.
+3. TinyUSB's init callback fires -> `NetworkEvent::Connected` -> the application opens
+   the audio channel.
+4. The device connects to `ws://192.168.7.2:8081/ws` and sends its `hello`, which carries
+   the device id.
 
-A raw USB CDC byte stream has no message boundaries at all. So adopting the WebSocket
-layout does **not** remove the need for a framing layer underneath; the two are
-complementary, not alternatives. Any design here is "framing + header", and only the
-header part can be borrowed.
-
-The recommended direction (see TASKS.md) is therefore to keep SLIP and strengthen it,
-rather than invent a new format:
-
-- **Keep SLIP** for framing. It is an RFC, already implemented on both sides, needs no
-  dependencies, and is readable in a hexdump.
-- **Add CRC-16/CCITT** as a frame trailer. Cheap, and closes the integrity gap.
-- **Reuse `BinaryProtocol3` as the audio payload header** so device and gateway share one
-  struct definition and the jitter buffer gets its timestamp.
-
-Alternatives considered: **COBS** has strictly better worst-case overhead (+1 byte per
-254) and a clean `cobs` pip package, and would be a reasonable swap if framing is ever
-revisited — but it is not enough of a win to justify changing both ends now.
-**HDLC/PPP** brings CRC for free but is heavier than this link needs.
+So a monitor that wants to know "StackChan is back" does not poll or scan -- it is a
+WebSocket server, and step 4 *is* the event. Unplug drops the TCP connection; replug
+repeats the sequence. The device MAC is derived from the factory MAC so the host sees a
+stable adapter across replugs rather than a new one each time.
 
 ### 5.4 Status
 
-Enumeration, handshake and framing are implemented and build clean. **Audio does not work
-end to end yet:** the device advertises and sends Opus, while `wasm/gateway/backends/*`
-unpack raw PCM16, and `ParseServerHello` never negotiates `format`. Until the gateway
-learns to decode Opus, audio is noise in both directions. This is tracked, not hidden.
+Builds clean under both USB variants, verified by link map: under NCM the SLIP protocol is
+entirely absent, under SLIP it is present. **Not yet exercised against real hardware.**
 
----
+The Opus/PCM mismatch is unchanged by this work and still blocks audio: the device sends
+Opus, `wasm/gateway/backends/*` unpack raw PCM16, and nothing negotiates `format`. Note
+that under NCM the relevant server is `serve.py` (WebSocket), not the serial gateway.
+
+### 5.5 If you ever need byte-level framing again
+
+`USB_SLIP` remains selectable. Its format is RFC 1055 SLIP -- `0xC0` delimiter, `0xDB`
+escape -- with a one-byte type prefix (`0x00` JSON, `0x01` audio) and no length or
+checksum. Implementations must change together:
+`xiaozhi-esp32/main/protocols/usb_protocol.cc` and `wasm/gateway/transport.py`.
+
+Worth recording why the WebSocket *layout* was not simply copied onto a serial link:
+`BinaryProtocol2`/`BinaryProtocol3` in `protocols/protocol.h` are packed payload
+*headers*, not a framing format. They rely on WebSocket for message boundaries and
+length, which a raw byte stream does not provide -- so adopting them would not have
+removed the need for framing underneath. Making the link a network gets the mature stack
+in full instead of imitating part of it.
 
 ## 6. App model and the AI Agent trapdoor
 
