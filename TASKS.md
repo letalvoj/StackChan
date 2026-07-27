@@ -11,9 +11,12 @@ Captured during architectural design sessions. Items are roughly priority-ordere
       `CONFIG_CONNECTION_TYPE_USB_NCM`, on by default. The older SLIP path remains
       selectable as `CONFIG_CONNECTION_TYPE_USB_SLIP`. See `ARCHITECTURE.md` §5.
       **Neither has been exercised against real hardware yet.**
-- [ ] **Bring up NCM on the physical device.** Confirm the host enumerates `usb0`, takes
-      a DHCP lease of 192.168.7.2, and that the device's WebSocket reaches `serve.py`.
-      Check replug behaviour and that the adapter identity stays stable.
+- [ ] **Bring up NCM on the physical device.** Follow `TESTING.md`: flash over UART (the
+      USB console is gone under NCM), watch for the expected log sequence, then run
+      `wasm/qa_selftest.py` and check the bar is green. Confirm the host enumerates
+      `usb0`, takes a DHCP lease of 192.168.7.2, and that replug is handled. Expect
+      `tts`/`mic` to pass while audio still sounds wrong -- that is the Opus gap below,
+      not a transport fault.
 - [ ] **Gateway must decode Opus** — The device advertises and sends Opus
       (`audio_service.cc` opens the Opus encoder unconditionally), but
       `wasm/gateway/backends/echo.py` and `gemini_api.py` unpack raw PCM16, and
