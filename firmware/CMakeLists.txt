@@ -21,3 +21,10 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(stack-chan)
+
+# Vendored esp-now emits a #warning about configTASKLIST_INCLUDE_COREID from its
+# debug-only task dump. components/ is fetched by fetch_repos.py and git-ignored,
+# so patching the source there would be lost on the next fetch. Scope the
+# suppression to that one component rather than enabling a global FreeRTOS option.
+idf_component_get_property(esp_now_lib esp-now COMPONENT_LIB)
+target_compile_options(${esp_now_lib} PRIVATE -Wno-cpp)

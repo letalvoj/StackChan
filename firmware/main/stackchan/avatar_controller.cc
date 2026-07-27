@@ -60,13 +60,10 @@ void AvatarController::SetStatus(const char* status) {
     }
 
     auto& avatar = stackchan.avatar();
-    auto& motion = stackchan.motion();
 
-    bool is_idle      = false;
-    bool is_listening = false;
+    bool is_idle = false;
 
     if (strcmp(status, Lang::Strings::LISTENING) == 0) {
-        is_listening = true;
         if (speaking_modifier_id_ >= 0) {
             stackchan.removeModifier(speaking_modifier_id_);
             avatar.mouth().setWeight(0);

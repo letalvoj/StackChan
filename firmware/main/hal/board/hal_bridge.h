@@ -5,8 +5,11 @@
  */
 #pragma once
 #ifndef __EMSCRIPTEN__
-#include "stackchan_camera.h"
 #include <driver/i2c_master.h>
+// Forward-declared rather than including stackchan_camera.h: that header pulls in
+// esp_video's <linux/videodev2.h>, whose _IO/_IOR/_IOW macros collide with lwip's
+// incompatible BSD-encoded ones. Only a pointer to the type is needed here.
+class StackChanCamera;
 #endif
 #include <cstdint>
 #include <lvgl.h>

@@ -17,6 +17,9 @@
 #include <esp_lcd_ili9341.h>
 #include <esp_timer.h>
 #include <algorithm>
+// Drops lwip's BSD ioctl macros (pulled in above via application.h) so esp_video's
+// V4L2 encoding below wins cleanly. Safe here: this TU uses neither ioctl family.
+#include "ioctl_compat.h"
 #include "stackchan_camera.h"
 #include "hal_bridge.h"
 

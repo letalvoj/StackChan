@@ -7,6 +7,8 @@
 #include "board/hal_bridge.h"
 #include "drivers/PY32IOExpander_Class/PY32IOExpander_Class.hpp"
 #include <mooncake_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <memory>
 
 static const std::string_view _tag = "HAL-IOE";

@@ -307,8 +307,8 @@ SystemUpdateWorker::SystemUpdateWorker()
         loading_page->setMessage(msg);
     });
 
-    // Update Firmware
-    bool result = GetHAL().updateFirmware([&](std::string_view msg) {
+    // Update Firmware (result intentionally ignored; progress is surfaced via the callback)
+    GetHAL().updateFirmware([&](std::string_view msg) {
         LvglLockGuard lock;
         loading_page->setMessage(msg);
     });

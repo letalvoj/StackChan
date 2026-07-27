@@ -101,7 +101,7 @@ XiaozhiPowerSavingWorker::XiaozhiPowerSavingWorker()
     _switch_charging->setSize(64, 36);
     _switch_charging->align(LV_ALIGN_TOP_MID, 0, 66);
     _switch_charging->setBgColor(lv_color_hex(0xB8D3FD), LV_PART_MAIN);
-    _switch_charging->setBgColor(lv_color_hex(0x615B9E), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    _switch_charging->setBgColor(lv_color_hex(0x615B9E), static_cast<lv_style_selector_t>(LV_PART_INDICATOR) | LV_STATE_CHECKED);
     _switch_charging->setBgColor(lv_color_hex(0xFFFFFF), LV_PART_KNOB);
     if (_config.allowShutdownWhenCharging) {
         _switch_charging->addState(LV_STATE_CHECKED);
@@ -228,7 +228,7 @@ XiaozhiGeneralWorker::XiaozhiGeneralWorker()
     _switch_start_ai_on_boot->setSize(64, 36);
     _switch_start_ai_on_boot->align(LV_ALIGN_TOP_MID, 0, 66);
     _switch_start_ai_on_boot->setBgColor(lv_color_hex(0xB8D3FD), LV_PART_MAIN);
-    _switch_start_ai_on_boot->setBgColor(lv_color_hex(0x615B9E), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    _switch_start_ai_on_boot->setBgColor(lv_color_hex(0x615B9E), static_cast<lv_style_selector_t>(LV_PART_INDICATOR) | LV_STATE_CHECKED);
     _switch_start_ai_on_boot->setBgColor(lv_color_hex(0xFFFFFF), LV_PART_KNOB);
     if (_config.startAiAgentOnBoot) {
         _switch_start_ai_on_boot->addState(LV_STATE_CHECKED);
