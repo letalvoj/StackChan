@@ -6,8 +6,77 @@ Captured during architectural design sessions. Items are roughly priority-ordere
 
 ## P0 — Active / In Progress
 
-- [ ] **UsbProtocol over ttyACM0** — New `Protocol` subclass for physical ESP32 serial communication.
+- [x] **UsbProtocol over ttyACM0** — `Protocol` subclass over TinyUSB CDC-ACM. Enumerates,
+      handshakes, SLIP framing, selected by `CONFIG_CONNECTION_TYPE_USB` (on by default).
+      See `ARCHITECTURE.md` §5. **Audio is not yet working end to end** — see next item.
+- [ ] **Gateway must decode Opus** — The device advertises and sends Opus
+      (`audio_service.cc` opens the Opus encoder unconditionally), but
+      `wasm/gateway/backends/echo.py` and `gemini_api.py` unpack raw PCM16, and
+      `ParseServerHello` never negotiates `format`. Audio is noise in both directions
+      until this is closed. Python-side only; do **not** "fix" it by making the device
+      advertise PCM, which would fork it from real firmware behaviour.
 - [ ] **gateway.py** — Unified transport-agnostic server with pluggable backends (`--mode=echo`, `--mode=gemini-api`) and pluggable transports (`--serial`, `--tcp`, `--websocket`).
+
+---
+
+## P0 — From the architecture audit
+
+Fidelity holes in the WASM harness. Each violates the "firmware in a harness, no
+bypasses" rule in `AGENT.md`. Detail in `ARCHITECTURE.md` §4.4.
+
+- [ ] **Delete the JavaScript protocol parser.** `window.onProtocolRxJson` in
+      `ui/audio_pipeline.js` re-parses the firmware's own stream via a tee in
+      `wasm_protocol.cpp`, and is load-bearing because `OnAudioResetDecoder()` is a
+      no-op. Implement that seam as a down-call, then remove the tee, the JS parser, and
+      the `window._wasmProtocolWs` export.
+- [ ] **Make `WasmProtocol::OpenAudioChannel()` actually connect** and return `false` on
+      failure, instead of setting a flag and returning `true`. This resurrects
+      `kDeviceStateConnecting` and the `ContinueOpenAudioChannel` path, which are
+      currently unreachable in the browser. ASYNCIFY is already enabled with no
+      allowlist, so awaiting the socket is straightforward.
+- [ ] **Stop faking the boot sequence.** `wasm_application.cpp` runs
+      `Starting → Activating → Idle` as three synchronous calls with nothing between.
+- [ ] **Move turn shaping into `ApplicationCore`.** Pre-roll/post-roll and the
+      `listen/detect_end` message live in `WasmApplication`, so they exist only in the
+      browser — and `application.cc` explicitly instructs that such logic belongs in the
+      shared core.
+- [ ] **Vendor the CDN scripts.** `shell.html` pulls petite-vue, onnxruntime and vad-web
+      from unpkg/jsdelivr, so the emulator does not boot offline. Mechanical fix.
+- [ ] **Stop fabricating vision responses.** `ui/camera_bridge.js` returns a
+      successful-looking explanation from inside its network-error `catch`, so an outage
+      is indistinguishable from success. Duplicated in `wasm_camera.cpp` and `serve.py`.
+
+---
+
+## P0 — USB hardening (host side)
+
+The device-side equivalents of these are fixed; the Python mirror is not.
+
+- [ ] **`wasm/gateway/transport.py` SLIP bugs.** The 64 KB cap is only checked on the
+      unescaped path, so a stream of `DB DC` pairs grows the buffer without bound; and a
+      malformed escape clears the buffer but keeps accumulating, delivering a corrupted
+      frame's tail as a whole frame whose first byte is misread as the type.
+- [ ] **Add CRC-16/CCITT to the frame** and reuse `BinaryProtocol3` as the audio payload
+      header. Rationale and alternatives considered in `ARCHITECTURE.md` §5.3.
+- [ ] **Round-trip test for the SLIP framer.** A property test over
+      `encode`/`feed` would have caught both bugs above in minutes. The repo currently
+      has exactly one test (`firmware/tests/motion_math_test.cpp`).
+- [ ] **Commit a socat recipe.** `tcp_transport.py` and `gateway.py` both reference socat
+      in their docstrings, but no script, Makefile target or README snippet actually
+      constructs the bridge.
+
+---
+
+## P1 — UX / behaviour
+
+- [ ] **Restore the top panel and home gesture in the AI Agent runtime.** Not an overlay
+      bug: `AppAiAgent` tears down Mooncake entirely (`ARCHITECTURE.md` §6), destroying
+      the layer that owns and polls those panels. Needs an owner inside the Xiaozhi
+      runtime — and a route back to the launcher, which does not currently exist since
+      `startXiaozhi()` never returns.
+- [ ] **Drop the hardcoded Chinese cloud endpoint.** `sdkconfig` still carries
+      `CONFIG_STACKCHAN_SERVER_URL="http://47.113.125.164:12800"`, which contradicts the
+      stated goal of cloud independence.
 
 ---
 
