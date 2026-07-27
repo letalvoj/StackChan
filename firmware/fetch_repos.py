@@ -3,13 +3,43 @@ import subprocess
 import json
 
 
+def _has_local_work(path, local_branch):
+    """True if `path` holds work that only exists here.
+
+    xiaozhi-esp32 is a git-ignored checkout carrying local-only commits (the
+    ApplicationCore extraction and UsbProtocol) on a branch that is deliberately
+    never pushed anywhere. A plain `git checkout <tag>` would silently swap the
+    working tree back to vanilla upstream and the build would quietly lose those
+    features, so refuse to touch such a checkout at all.
+    """
+    if not local_branch or not os.path.exists(path):
+        return False
+
+    exists = subprocess.run(
+        ["git", "-C", path, "rev-parse", "--verify", "--quiet", local_branch],
+        capture_output=True,
+    )
+    return exists.returncode == 0
+
+
 def clone_or_update_repo(
-    repo_url, path, ref=None, with_submodules=False, patch_path=None
+    repo_url, path, ref=None, with_submodules=False, local_branch=None
 ):
-    import os
+    if _has_local_work(path, local_branch):
+        print(
+            f"Skipping {path}: local-only branch '{local_branch}' is present. "
+            f"Refusing to check out '{ref}' over it."
+        )
+        return
 
     if not os.path.exists(path):
         subprocess.run(["git", "clone", repo_url, path], check=True)
+        if local_branch:
+            print(
+                f"WARNING: {path} was cloned fresh at '{ref}'. The local-only "
+                f"'{local_branch}' branch is NOT in this checkout and cannot be "
+                f"recovered from any remote."
+            )
     else:
         subprocess.run(["git", "-C", path, "fetch"], check=True)
 
@@ -22,23 +52,6 @@ def clone_or_update_repo(
             check=True,
         )
 
-    # 应用 patch
-    if patch_path:
-        patch_full_path = (
-            patch_path
-            if os.path.isabs(patch_path)
-            else os.path.join(os.getcwd(), patch_path)
-        )
-        # 使用 git apply --check 先检测补丁是否能应用，避免报错
-        check_result = subprocess.run(
-            ["git", "-C", path, "apply", "--check", patch_full_path]
-        )
-        if check_result.returncode == 0:
-            subprocess.run(["git", "-C", path, "apply", patch_full_path], check=True)
-            print(f"Applied patch {patch_path} to {path}")
-        else:
-            print(f"Patch {patch_path} cannot be applied cleanly to {path}, skipped.")
-
 
 def fetch_dependencies():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,12 +62,13 @@ def fetch_dependencies():
 
     for repo in repos:
         repo_path = os.path.join(script_dir, repo["path"])
-        branch = repo.get("branch")
-        with_submodules = repo.get("with_submodules", False)
-        patch = repo.get("patch")
-        if patch and not os.path.isabs(patch):
-            patch = os.path.join(script_dir, patch)
-        clone_or_update_repo(repo["url"], repo_path, branch, with_submodules, patch)
+        clone_or_update_repo(
+            repo["url"],
+            repo_path,
+            repo.get("branch"),
+            repo.get("with_submodules", False),
+            local_branch=repo.get("local_branch"),
+        )
 
 
 if __name__ == "__main__":
