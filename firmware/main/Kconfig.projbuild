@@ -19,19 +19,51 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
-config CONNECTION_TYPE_USB
-    bool "Use USB CDC-ACM transport instead of MQTT/WebSocket"
-    default n
-    depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+choice CONNECTION_TYPE
+    prompt "Protocol transport"
+    default CONNECTION_TYPE_DEFAULT
     help
-        Route the audio/JSON protocol over a USB CDC-ACM device interface instead of
-        the network. The board enumerates on the host as /dev/ttyACM*, carrying
-        SLIP-framed frames that a local gateway (wasm/gateway.py --transport=serial)
-        terminates. This removes the dependency on a remote MQTT/WebSocket server.
+        How the device reaches its server. Both USB options need the USB-OTG
+        peripheral, so neither can be combined with USB host mode, and both take
+        GPIO19/20 from USB-Serial-JTAG -- the USB console goes away and logging
+        continues over UART0.
 
-        Requires the USB-OTG peripheral, so it cannot be combined with USB host mode.
-        Selecting this also takes over GPIO19/20 from USB-Serial-JTAG, which means
-        the USB console goes away; logging continues over UART0.
+    config CONNECTION_TYPE_DEFAULT
+        bool "MQTT / WebSocket over the network"
+        help
+            Stock behaviour: pick MQTT or WebSocket from the OTA config.
+
+    config CONNECTION_TYPE_USB_NCM
+        bool "WebSocket over USB networking (CDC-NCM)"
+        depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+        help
+            Enumerate as a USB *network adapter*. The host gets a plain network
+            interface (usb0 on Linux) and the device runs the ordinary
+            WebsocketProtocol over it -- the same code path used over WiFi and in
+            the WASM harness. No bespoke wire format, and TCP supplies framing,
+            ordering and integrity.
+
+            This is the preferred option: it is the only one with no protocol
+            implementation of its own to go wrong.
+
+    config CONNECTION_TYPE_USB_SLIP
+        bool "SLIP framing over USB CDC-ACM"
+        depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+        help
+            Enumerate as a serial port (/dev/ttyACM*) carrying SLIP-framed JSON and
+            audio, terminated by wasm/gateway.py --transport=serial. Simpler to
+            inspect with a hexdump than NCM, but it is a private protocol with no
+            integrity check. Prefer CONNECTION_TYPE_USB_NCM.
+endchoice
+
+config USB_NET_WEBSOCKET_URL
+    string "WebSocket URL reached over USB networking"
+    depends on CONNECTION_TYPE_USB_NCM
+    default "ws://192.168.7.2:8081/ws"
+    help
+        The device runs a DHCP server on the USB link and takes 192.168.7.1, so the
+        host lands on 192.168.7.2. This URL overrides any stored WebSocket setting
+        when USB networking is selected, so the device does not need provisioning.
 
 choice
     prompt "Flash Assets"

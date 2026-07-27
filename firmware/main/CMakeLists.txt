@@ -51,7 +51,6 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
-            "protocols/usb_protocol.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application_core.cc"
@@ -69,6 +68,14 @@ list(TRANSFORM SOURCES PREPEND "${XIAOZHI_MAIN_DIR}/")
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 # Transform include dirs to absolute paths from xiaozhi-esp32/main
 list(TRANSFORM INCLUDE_DIRS PREPEND "${XIAOZHI_MAIN_DIR}/")
+
+# usb_protocol.cc pulls in TinyUSB's CDC driver, which is only compiled when the CDC
+# class is enabled. Under CONNECTION_TYPE_USB_NCM the device is a network adapter and
+# CDC is off, so including this unconditionally breaks that build.
+# Appended after the TRANSFORM above, so it needs the explicit prefix.
+if(CONFIG_CONNECTION_TYPE_USB_SLIP)
+    list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/protocols/usb_protocol.cc")
+endif()
 
 # Add board common files
 list(APPEND SOURCES

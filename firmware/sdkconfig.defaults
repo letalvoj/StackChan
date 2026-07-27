@@ -10,13 +10,16 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_LANGUAGE_EN_US=y
 CONFIG_BOARD_TYPE_M5STACK_STACK_CHAN=y
 
-# USB CDC-ACM transport. TinyUSB claims the USB-OTG peripheral on GPIO19/20, which is
-# the same pin pair USB-Serial-JTAG uses, so the USB console must be turned off or the
-# two fight over the PHY. Logging stays available on UART0 (the primary console).
-CONFIG_CONNECTION_TYPE_USB=y
+# USB networking (CDC-NCM). The device enumerates as a network adapter rather than a
+# serial port, so the stock WebsocketProtocol runs over USB with no bespoke wire format.
+#
+# TinyUSB claims the USB-OTG peripheral on GPIO19/20, the same pin pair USB-Serial-JTAG
+# uses, so the USB console must be off or the two fight over the PHY. Logging stays on
+# UART0 (the primary console) -- note this means `idf.py monitor` needs the UART, not
+# the USB cable.
+CONFIG_CONNECTION_TYPE_USB_NCM=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
-CONFIG_TINYUSB_CDC_ENABLED=y
-CONFIG_TINYUSB_CDC_COUNT=1
 
 CONFIG_SEND_WAKE_WORD_DATA=n
 CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y

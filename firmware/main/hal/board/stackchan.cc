@@ -1,4 +1,13 @@
 #include "wifi_board.h"
+#include "usb_net_board.h"
+
+// The board's network base class is a build-time choice. Under USB networking there is
+// no radio to provision, and the stock WebsocketProtocol runs over the USB link.
+#if CONFIG_CONNECTION_TYPE_USB_NCM
+using StackChanNetBoard = UsbNetBoard;
+#else
+using StackChanNetBoard = WifiBoard;
+#endif
 #include "cores3_audio_codec.h"
 #include "display/lcd_display.h"
 #include "stackchan_display.h"
@@ -235,7 +244,7 @@ private:
     uint32_t consecutive_failures_ = 0;
 };
 
-class M5StackCoreS3Board : public WifiBoard {
+class M5StackCoreS3Board : public StackChanNetBoard {
 private:
     static constexpr int kPowerSaveSleepDelaySeconds = 300;
     static constexpr int kPowerStatePollIntervalMs   = 1000;
@@ -546,7 +555,7 @@ public:
         if (level != PowerSaveLevel::LOW_POWER) {
             power_save_timer_->WakeUp();
         }
-        WifiBoard::SetPowerSaveLevel(level);
+        StackChanNetBoard::SetPowerSaveLevel(level);
     }
 
     virtual Backlight* GetBacklight() override
