@@ -30,12 +30,17 @@ public:
     std::string GetBoardJson() override;
     std::string GetDeviceStatusJson() override;
 
+    // Called from TinyUSB's tud_mount_cb/tud_umount_cb weak hooks, which are plain C
+    // globals. USB attach/detach is the only reliable cable-presence signal available.
+    static void HandleHostAttached(bool attached);
+
 protected:
     NetworkEventCallback network_event_callback_ = nullptr;
     void OnNetworkEvent(NetworkEvent event, const std::string& data = "");
 
 private:
     esp_netif_t* netif_ = nullptr;
+    bool usb_mounted_ = false;
     bool host_attached_ = false;
 
     bool StartUsbNetwork();
@@ -47,5 +52,5 @@ private:
     static esp_err_t NetifTransmit(void* handle, void* buffer, size_t len);
     static void NetifFreeRxBuffer(void* handle, void* buffer);
     static esp_err_t OnUsbPacketReceived(void* buffer, uint16_t len, void* ctx);
-    static void OnUsbNetInit(void* ctx);
+    static void OnDhcpLease(void* arg, esp_event_base_t base, int32_t id, void* data);
 };

@@ -2,12 +2,15 @@ menu "StackChan Server"
 
 config STACKCHAN_SERVER_URL
     string "StackChan server base URL"
-    default "http://47.113.125.164:12800"
+    default "http://192.168.7.2:12800"
     help
         Base URL (scheme + host + port, no trailing slash) of the StackChan backend.
         The HAL composes endpoint paths like /stackChan/device/user,
-        /stackChan/apps and /stackChan/ws from this base. Override in your
-        sdkconfig.defaults.local to point at a self-hosted deployment.
+        /stackChan/apps and /stackChan/ws from this base.
+
+        Defaults to the host side of the USB link, not a vendor server: this repo is
+        local-first and must work with no internet. Override in
+        sdkconfig.defaults.local to point at your own deployment.
 
 endmenu
 
@@ -15,9 +18,14 @@ menu "Xiaozhi Assistant"
 
 config OTA_URL
     string "Default OTA URL"
-    default "https://api.tenclass.net/xiaozhi/ota/"
+    default ""
     help
-        The application will access this URL to check for new firmwares and server address.
+        Remote provisioning/activation service. It returns the MQTT/WebSocket server
+        config used by CONNECTION_TYPE_DEFAULT, so it is only meaningful for that
+        transport; the USB transports skip it entirely and use a local endpoint.
+
+        Deliberately empty rather than pointing at a vendor cloud. Set it only if you
+        actually run CONNECTION_TYPE_DEFAULT against a server you control.
 
 choice CONNECTION_TYPE
     prompt "Protocol transport"

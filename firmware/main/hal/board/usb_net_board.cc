@@ -65,8 +65,7 @@ esp_err_t UsbNetBoard::NetifTransmit(void* handle, void* buffer, size_t len) {
 
 void UsbNetBoard::NetifFreeRxBuffer(void* handle, void* buffer) {
     (void)handle;
-    (void)buffer;
-    // TinyUSB owns the RX buffer and recycles it after OnUsbPacketReceived returns.
+    free(buffer);
 }
 
 esp_err_t UsbNetBoard::OnUsbPacketReceived(void* buffer, uint16_t len, void* ctx) {
@@ -75,20 +74,72 @@ esp_err_t UsbNetBoard::OnUsbPacketReceived(void* buffer, uint16_t len, void* ctx
     if (self == nullptr || self->netif_ == nullptr) {
         return ESP_OK;
     }
-    return esp_netif_receive(self->netif_, buffer, len, nullptr);
+
+    // Copy before handing the packet to lwIP. esp_netif_receive wraps the pointer in a
+    // zero-copy PBUF_REF and posts it asynchronously to tcpip_thread, while TinyUSB
+    // calls tud_network_recv_renew() the instant this callback returns -- re-arming the
+    // very same static NTB buffer for the next USB transfer. Passing the raw pointer
+    // through would let the next packet overwrite one lwIP has not read yet.
+    void* owned = malloc(len);
+    if (owned == nullptr) {
+        return ESP_ERR_NO_MEM;   // drop; the peer will retransmit
+    }
+    memcpy(owned, buffer, len);
+
+    esp_err_t err = esp_netif_receive(self->netif_, owned, len, nullptr);
+    if (err != ESP_OK) {
+        free(owned);   // not handed over, so still ours
+    }
+    return err;
 }
 
-void UsbNetBoard::OnUsbNetInit(void* ctx) {
-    (void)ctx;
+void UsbNetBoard::HandleHostAttached(bool attached) {
     auto self = instance_;
-    if (self == nullptr || self->host_attached_) {
+    if (self == nullptr || self->usb_mounted_ == attached) {
         return;
     }
+    self->usb_mounted_ = attached;
+
+    if (attached) {
+        ESP_LOGI(TAG, "USB cable attached; waiting for the host to take a DHCP lease");
+        return;   // not "connected" until the host actually has an address
+    }
+
+    ESP_LOGW(TAG, "USB cable detached");
+    self->host_attached_ = false;
+    self->OnNetworkEvent(NetworkEvent::Disconnected, "USB");
+}
+
+void UsbNetBoard::OnDhcpLease(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    (void)base;
+    (void)id;
+    auto self = static_cast<UsbNetBoard*>(arg);
+    auto evt = static_cast<ip_event_ap_staipassigned_t*>(data);
+    if (self == nullptr || evt == nullptr || evt->esp_netif != self->netif_) {
+        return;   // some other netif's DHCP server
+    }
+    if (self->host_attached_) {
+        return;   // lease renewal, not a new host
+    }
+
     self->host_attached_ = true;
-    ESP_LOGI(TAG, "Host configured the USB network interface");
-    // This is the closest signal TinyUSB gives us to "the cable is in and the host has
-    // claimed the interface". The application waits on it before opening the protocol.
+    ESP_LOGI(TAG, "Host took DHCP lease " IPSTR "; USB link is usable", IP2STR(&evt->ip));
+
+    // Only now can the host actually be reached, so this -- not USB mount -- is the
+    // right moment to let the application open the protocol.
     self->OnNetworkEvent(NetworkEvent::Connected, "USB");
+}
+
+// TinyUSB weak hooks. Deliberately not tud_network_init_cb(): that is declared by
+// net_device.h and forwarded by esp_tinyusb, but nothing in the NCM class driver ever
+// calls it -- it is an ECM/RNDIS-only hook, so relying on it meant the link never came
+// up at all. Mount/unmount are driven by SET_CONFIGURATION and bus reset.
+extern "C" void tud_mount_cb(void) {
+    UsbNetBoard::HandleHostAttached(true);
+}
+
+extern "C" void tud_umount_cb(void) {
+    UsbNetBoard::HandleHostAttached(false);
 }
 
 bool UsbNetBoard::StartUsbNetwork() {
@@ -166,7 +217,6 @@ bool UsbNetBoard::StartUsbNetwork() {
     memcpy(net_cfg.mac_addr, mac, sizeof(mac));
     net_cfg.on_recv_callback = OnUsbPacketReceived;
     net_cfg.free_tx_buffer   = nullptr;
-    net_cfg.on_init_callback = OnUsbNetInit;
     net_cfg.user_context     = this;
 
     err = tinyusb_net_init(TINYUSB_USBDEV_0, &net_cfg);
@@ -175,8 +225,13 @@ bool UsbNetBoard::StartUsbNetwork() {
         return false;
     }
 
+    // The DHCP lease, not USB enumeration, is what tells us the host can be reached.
+    // esp_netif registers this for any netif running a DHCP server, not just SoftAP.
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_AP_STAIPASSIGNED,
+                                               OnDhcpLease, this));
+
     esp_netif_action_start(netif_, nullptr, 0, nullptr);
-    ESP_LOGI(TAG, "USB network up: device 192.168.7.1, host gets 192.168.7.2");
+    ESP_LOGI(TAG, "USB network up: device 192.168.7.1, host will be offered 192.168.7.2");
     return true;
 }
 
