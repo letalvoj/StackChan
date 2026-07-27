@@ -23,7 +23,9 @@ static bool has_suffix(std::string_view str, std::string_view suffix)
 lv_image_dsc_t get_image(std::string_view name)
 {
     std::string key(name);
-    lv_image_dsc_t dsc = {0};
+    // `{}` rather than `{0}`: the first member is a nested struct (lv_image_header_t),
+    // so `{0}` only zeroes that member's first field and warns under -Wmissing-braces.
+    lv_image_dsc_t dsc = {};
 
     // 1. Retrieve data from Assets partition
     void* data_ptr   = nullptr;

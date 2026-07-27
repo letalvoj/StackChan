@@ -3,7 +3,10 @@ project(stack-chan-wasm C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
-add_compile_options(-O2 -Wall -Wno-missing-field-initializers -Wno-format -Wno-mismatched-tags -Wno-unused-lambda-capture -Wno-unused-variable -Wno-unused-function -Wno-reorder-ctor -Wno-sign-compare -Wno-c++20-designator -Wno-delete-non-abstract-non-virtual-dtor -Wno-implicit-function-declaration)
+# -Wno-unused-private-field: upstream xiaozhi settings.h keeps fields the WASM build
+# never reads. It lives in a non-SYSTEM include dir (our application_core.h is its
+# neighbour), so it cannot be silenced by include classification alone.
+add_compile_options(-O2 -Wall -Wno-missing-field-initializers -Wno-format -Wno-mismatched-tags -Wno-unused-lambda-capture -Wno-unused-variable -Wno-unused-function -Wno-reorder-ctor -Wno-sign-compare -Wno-c++20-designator -Wno-delete-non-abstract-non-virtual-dtor -Wno-implicit-function-declaration -Wno-unused-private-field)
 
 add_definitions(
     -DLV_CONF_INCLUDE_SIMPLE=1
@@ -19,7 +22,9 @@ set(LVGL_DIR "${FW_DIR}/managed_components/lvgl__lvgl")
 
 file(GLOB_RECURSE LVGL_SOURCES "${LVGL_DIR}/src/*.c")
 add_library(lvgl STATIC ${LVGL_SOURCES})
-target_include_directories(lvgl PUBLIC 
+# SYSTEM: LVGL is vendored, so its diagnostics are not actionable for us and would
+# otherwise drown out warnings in our own code.
+target_include_directories(lvgl SYSTEM PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/shims"
     "${LVGL_DIR}"
     "${LVGL_DIR}/src"
@@ -66,17 +71,24 @@ set(APP_SOURCES
 add_executable(stack-chan ${APP_SOURCES})
 set_target_properties(stack-chan PROPERTIES SUFFIX ".html")
 
+# Our code: full warnings. `xiaozhi-esp32/main` and `.../protocols` stay non-SYSTEM
+# because that is where our own application_core.h and usb_protocol.h live.
 target_include_directories(stack-chan PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/shims"
     "${CMAKE_CURRENT_SOURCE_DIR}/hal"
     "${FW_DIR}/xiaozhi-esp32/main"
-    "${FW_DIR}/xiaozhi-esp32/main/display"
-    "${FW_DIR}/xiaozhi-esp32/main/display/lvgl_display"
+    "${FW_DIR}/xiaozhi-esp32/main/protocols"
     "${FW_DIR}/main"
     "${FW_DIR}/main/hal"
     "${FW_DIR}/main/apps"
     "${FW_DIR}/main/stackchan"
     "${FW_DIR}/main/assets"
+)
+
+# Vendored third-party and untouched upstream xiaozhi subtrees. SYSTEM suppresses
+# their diagnostics (roller.hpp VLAs, lvgl_image.h missing-override) without
+# desensitising our own sources.
+target_include_directories(stack-chan SYSTEM PUBLIC
     "${FW_DIR}/components/ArduinoJson/src"
     "${FW_DIR}/components/mooncake/src"
     "${FW_DIR}/components/mooncake/src/mooncake"
@@ -89,10 +101,16 @@ target_include_directories(stack-chan PUBLIC
     "${FW_DIR}/xiaozhi-esp32/main/display"
     "${FW_DIR}/xiaozhi-esp32/main/display/lvgl_display"
     "${FW_DIR}/xiaozhi-esp32/main/boards/common"
-    "${FW_DIR}/xiaozhi-esp32/main/protocols"
     "${FW_DIR}/xiaozhi-esp32/main/audio"
     "${FW_DIR}/xiaozhi-esp32/main/audio/demuxer"
     "${FW_DIR}/managed_components/78__xiaozhi-fonts/include"
+)
+
+# lvgl_image.cc includes its own header by quoted path, so it resolves relative to the
+# source file and bypasses the SYSTEM classification above. Suppress at the source.
+set_source_files_properties(
+    "${FW_DIR}/xiaozhi-esp32/main/display/lvgl_display/lvgl_image.cc"
+    PROPERTIES COMPILE_OPTIONS "-Wno-inconsistent-missing-override"
 )
 
 # HEAPU8/HEAP16 are read from JS (ui/camera_bridge.js, ui/audio_pipeline.js) and from
