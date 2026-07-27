@@ -19,6 +19,20 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config CONNECTION_TYPE_USB
+    bool "Use USB CDC-ACM transport instead of MQTT/WebSocket"
+    default n
+    depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+    help
+        Route the audio/JSON protocol over a USB CDC-ACM device interface instead of
+        the network. The board enumerates on the host as /dev/ttyACM*, carrying
+        SLIP-framed frames that a local gateway (wasm/gateway.py --transport=serial)
+        terminates. This removes the dependency on a remote MQTT/WebSocket server.
+
+        Requires the USB-OTG peripheral, so it cannot be combined with USB host mode.
+        Selecting this also takes over GPIO19/20 from USB-Serial-JTAG, which means
+        the USB console goes away; logging continues over UART0.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE
