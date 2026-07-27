@@ -95,10 +95,15 @@ target_include_directories(stack-chan PUBLIC
     "${FW_DIR}/managed_components/78__xiaozhi-fonts/include"
 )
 
+# HEAPU8/HEAP16 are read from JS (ui/camera_bridge.js, ui/audio_pipeline.js) and from
+# EM_ASM bodies that use the `Module.` prefix. Under ASSERTIONS Emscripten installs an
+# abort() getter on unexported runtime symbols, so merely *testing* `Module.HEAPU8`
+# killed the runtime on the first camera frame. Exporting them is growth-safe:
+# updateMemoryViews() reassigns Module['HEAPU8'] after every memory growth.
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} \
     -s ALLOW_MEMORY_GROWTH=1 \
     -s EXPORTED_FUNCTIONS=['_malloc','_free','_main','_wasm_camera_test_capture','_wasm_open_app_by_name'] \
-    -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
+    -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAP16'] \
     -s MODULARIZE=0 \
     -s EXPORT_ES6=0 \
     --js-library ${CMAKE_CURRENT_SOURCE_DIR}/hal/hal_bridge.js \
