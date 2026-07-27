@@ -15,6 +15,8 @@
 #include <esp_event.h>
 #include <cJSON.h>
 #include <cstring>
+#include <cinttypes>
+#include <esp_timer.h>
 
 #include <tinyusb.h>
 #include <tinyusb_net.h>
@@ -58,6 +60,12 @@ esp_err_t UsbNetBoard::NetifTransmit(void* handle, void* buffer, size_t len) {
     // Synchronous: lwIP owns the pbuf and reuses it once we return, so the packet has
     // to be handed to TinyUSB before this call completes.
     if (tinyusb_net_send_sync(buffer, len, nullptr, pdMS_TO_TICKS(100)) != ESP_OK) {
+        // Rate-limited: a wedged host would otherwise flood the console at line rate
+        // and hide whatever else is going wrong.
+        static uint32_t dropped = 0;
+        if ((++dropped % 100) == 1) {
+            ESP_LOGW(TAG, "TX drop: host not draining USB (%" PRIu32 " total)", dropped);
+        }
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -93,6 +101,20 @@ esp_err_t UsbNetBoard::OnUsbPacketReceived(void* buffer, uint16_t len, void* ctx
     return err;
 }
 
+void UsbNetBoard::LogWaitingState(void* arg) {
+    auto self = static_cast<UsbNetBoard*>(arg);
+    if (self == nullptr || self->host_attached_) {
+        return;
+    }
+    // The single most useful line when nothing happens: it says exactly how far the
+    // link got, so "cable not detected" and "host never took a lease" are different
+    // symptoms rather than the same silence.
+    ESP_LOGW(TAG, "waiting for host: usb_mounted=%s dhcp_lease=%s "
+                  "(host should show a new network interface; check cable is data-capable)",
+             self->usb_mounted_ ? "yes" : "NO",
+             self->host_attached_ ? "yes" : "NO");
+}
+
 void UsbNetBoard::HandleHostAttached(bool attached) {
     auto self = instance_;
     if (self == nullptr || self->usb_mounted_ == attached) {
@@ -123,6 +145,9 @@ void UsbNetBoard::OnDhcpLease(void* arg, esp_event_base_t base, int32_t id, void
     }
 
     self->host_attached_ = true;
+    if (self->wait_timer_ != nullptr) {
+        esp_timer_stop(self->wait_timer_);
+    }
     ESP_LOGI(TAG, "Host took DHCP lease " IPSTR "; USB link is usable", IP2STR(&evt->ip));
 
     // Only now can the host actually be reached, so this -- not USB mount -- is the
@@ -219,6 +244,9 @@ bool UsbNetBoard::StartUsbNetwork() {
     net_cfg.free_tx_buffer   = nullptr;
     net_cfg.user_context     = this;
 
+    ESP_LOGI(TAG, "USB adapter MAC %02x:%02x:%02x:%02x:%02x:%02x (host sees this as its peer)",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
     err = tinyusb_net_init(TINYUSB_USBDEV_0, &net_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_net_init failed: %s", esp_err_to_name(err));
@@ -248,6 +276,18 @@ void UsbNetBoard::StartNetwork() {
     // from a previous WiFi setup would otherwise send the device nowhere.
     Settings settings("websocket", true);
     settings.SetString("url", CONFIG_USB_NET_WEBSOCKET_URL);
+    ESP_LOGI(TAG, "protocol endpoint pinned to %s", CONFIG_USB_NET_WEBSOCKET_URL);
+
+    const esp_timer_create_args_t args = {
+        .callback = LogWaitingState,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "usbnet_wait",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &wait_timer_) == ESP_OK) {
+        esp_timer_start_periodic(wait_timer_, 5 * 1000 * 1000);
+    }
 }
 
 const char* UsbNetBoard::GetNetworkStateIcon() {
