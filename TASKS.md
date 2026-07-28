@@ -15,15 +15,17 @@ Captured during architectural design sessions. Items are roughly priority-ordere
       USB console is gone under NCM), watch for the expected log sequence, then run
       `wasm/qa_selftest.py` and check the bar is green. Confirm the host enumerates
       `usb0`, takes a DHCP lease of 192.168.7.2, and that replug is handled. Expect
-      `tts`/`mic` to pass while audio still sounds wrong -- that is the Opus gap below,
-      not a transport fault.
-- [ ] **Gateway must decode Opus** — The device advertises and sends Opus
+      `tts` to produce an audible 440 Hz tone; the Opus gap is closed.
+- [x] **Gateway must decode Opus** — The device advertises and sends Opus
       (`audio_service.cc` opens the Opus encoder unconditionally), but
       `wasm/gateway/backends/echo.py` and `gemini_api.py` unpack raw PCM16, and
       `ParseServerHello` never negotiates `format`. Audio is noise in both directions
       until this is closed. Python-side only; do **not** "fix" it by making the device
       advertise PCM, which would fork it from real firmware behaviour. Under NCM the
       relevant server is `serve.py` (WebSocket), not the serial gateway.
+      DONE: `wasm/audio_codec.py` picks a codec from the client's hello and transcodes at
+      the socket edge, so backends only ever see PCM16. Covered by
+      `wasm/tests/test_audio_codec.py` and `test_serve_negotiation.py` (20 tests).
 - [ ] **gateway.py** — Unified transport-agnostic server with pluggable backends (`--mode=echo`, `--mode=gemini-api`) and pluggable transports (`--serial`, `--tcp`, `--websocket`).
 
 ---

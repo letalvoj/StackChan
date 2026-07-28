@@ -11,12 +11,15 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "hal/*.c"
     "hal/*.cc"
     "hal/*.cpp"
+    "protocols/*.cc"
+    "protocols/*.cpp"
     "stackchan/*.c"
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
 set(STACK_CHAN_INCLUDE_DIRS 
     "."
+    "protocols"
 )
 list(APPEND STACK_CHAN_SOURCES main.cpp)
 

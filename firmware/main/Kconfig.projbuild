@@ -46,13 +46,12 @@ choice CONNECTION_TYPE
         depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
         help
             Enumerate as a USB *network adapter*. The host gets a plain network
-            interface (usb0 on Linux) and the device runs the ordinary
-            WebsocketProtocol over it -- the same code path used over WiFi and in
-            the WASM harness. No bespoke wire format, and TCP supplies framing,
-            ordering and integrity.
+            interface (usb0 on Linux), and the device LISTENS on 192.168.7.1 for
+            the host to connect -- it never dials out, so it never needs to know
+            the host's address. TCP supplies framing, ordering and integrity, and
+            the wire protocol is the same WebSocket/JSON the WiFi path uses.
 
-            This is the preferred option: it is the only one with no protocol
-            implementation of its own to go wrong.
+            This is the preferred option.
 
     config CONNECTION_TYPE_USB_SLIP
         bool "SLIP framing over USB CDC-ACM"
@@ -64,14 +63,15 @@ choice CONNECTION_TYPE
             integrity check. Prefer CONNECTION_TYPE_USB_NCM.
 endchoice
 
-config USB_NET_WEBSOCKET_URL
-    string "WebSocket URL reached over USB networking"
+config USB_NET_LISTEN_PORT
+    int "Port the device listens on for a host connection"
     depends on CONNECTION_TYPE_USB_NCM
-    default "ws://192.168.7.2:8081/ws"
+    default 8081
     help
-        The device runs a DHCP server on the USB link and takes 192.168.7.1, so the
-        host lands on 192.168.7.2. This URL overrides any stored WebSocket setting
-        when USB networking is selected, so the device does not need provisioning.
+        Under USB networking the device is the *server*: it listens on its own address
+        (192.168.7.1) and the host connects to ws://192.168.7.1:<port>/ws whenever it
+        likes. Nothing has to be provisioned, the firmware never needs to know the
+        host's address, and replug needs no retry logic.
 
 choice
     prompt "Flash Assets"

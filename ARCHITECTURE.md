@@ -169,12 +169,14 @@ Transport is a three-way Kconfig choice:
 | `USB_NCM` | **Default.** USB network adapter; stock `WebsocketProtocol` runs over it. |
 | `USB_SLIP` | Legacy serial framing. Kept building, but superseded. |
 
-Under NCM the device is simply a host on a tiny network, so the protocol stack above the
-link is *unchanged from WiFi*:
+Under NCM the device is simply a host on a tiny network. The wire protocol above the
+link is *unchanged from WiFi* -- same WebSocket, same JSON, same binary audio frames --
+but the device **listens** rather than dialling out, so it never needs to know the host's
+address:
 
 ```
-device ──WebSocket over TCP over USB-ethernet──> serve.py ──> backend
-         ↑ byte-identical to the WiFi path and to the WASM harness
+host ──connects to ws://192.168.7.1:8081/ws──> device
+       ↑ same wire protocol as the WiFi path and the WASM harness
 ```
 
 TCP supplies length framing, ordering, retransmission and integrity; WebSocket supplies

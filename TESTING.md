@@ -82,11 +82,10 @@ answer — the USB link is up but the network is not.
 
 ### Run the QA harness
 
-The device dials out, so the harness is a **server**. Start it, then power-cycle or
-replug the device.
+The device **listens**, so dial it:
 
 ```bash
-cd wasm && ./.venv/bin/python qa_selftest.py
+cd wasm && ./.venv/bin/python qa_selftest.py --connect 192.168.7.1
 ```
 
 It walks every protocol path and prints a pass/fail bar:
@@ -102,6 +101,10 @@ It walks every protocol path and prints a pass/fail bar:
 
   ███████  7/7 passed
 ```
+
+Audio now works end to end: the server adapts to whatever the device advertises
+(Opus from firmware, PCM from the WASM harness), so `tts.downlink` should produce an
+audible 440 Hz tone rather than noise.
 
 `screen` is deliberately **visible** — the panel dims, brightens and flips theme while you
 watch. A JSON reply only proves the message arrived; the panel changing proves the whole

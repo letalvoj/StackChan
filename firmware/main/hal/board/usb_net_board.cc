@@ -6,7 +6,6 @@
 #if CONFIG_CONNECTION_TYPE_USB_NCM
 
 #include "esp_network.h"
-#include "settings.h"
 #include "assets/lang_config.h"
 #include "font_awesome.h"
 
@@ -271,12 +270,10 @@ void UsbNetBoard::StartNetwork() {
         return;
     }
 
-    // Force the WebSocket endpoint to the host side of the link. USB networking is a
-    // build-time decision, so there is nothing to provision and a stale stored URL
-    // from a previous WiFi setup would otherwise send the device nowhere.
-    Settings settings("websocket", true);
-    settings.SetString("url", CONFIG_USB_NET_WEBSOCKET_URL);
-    ESP_LOGI(TAG, "protocol endpoint pinned to %s", CONFIG_USB_NET_WEBSOCKET_URL);
+    // Nothing to provision: the device listens rather than dialling out, so it never
+    // needs the host's address. The host connects to us whenever it likes.
+    ESP_LOGI(TAG, "waiting for a host to connect to ws://192.168.7.1:%d/ws",
+             CONFIG_USB_NET_LISTEN_PORT);
 
     const esp_timer_create_args_t args = {
         .callback = LogWaitingState,

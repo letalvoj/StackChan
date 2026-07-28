@@ -20,6 +20,8 @@ import urllib.parse
 import uuid
 from typing import Optional
 import websockets
+
+from audio_codec import codec_from_hello, CodecError
 import websockets.http11
 from debug_telemetry import FlushedFileHandler, WebSocketLogHandler
 from gateway.backends.gemini_api import GeminiLiveSession
@@ -76,6 +78,9 @@ class ClientSession:
     response_task: Optional[asyncio.Task] = None
     abort_event: asyncio.Event = field(default_factory=asyncio.Event)
     last_audio_time: float = field(default_factory=time.monotonic)
+    # Adapts whatever the client advertised in its hello to/from PCM16, so every
+    # backend below sees one format. ESP32 sends Opus, the WASM harness sends PCM.
+    codec: object = None
     gemini_session: Optional[GeminiLiveSession] = None
 
 
@@ -289,9 +294,13 @@ async def respond_to_utterance(session: ClientSession, received_pcm_chunks: list
                     logger.info(f"🛑 [SERVER:TTS:{session.session_id[:8]}...] Response streaming interrupted mid-flight via abort event!")
                     break
                 chunk = reversed_pcm[i : i + chunk_size]
-                
-                # Await strictly the main audio protocol transmission
-                await websocket.send(chunk)
+
+                # Await strictly the main audio protocol transmission. encode() returns
+                # a list because a partial tail is padded to a whole frame rather than
+                # dropped -- Opus rejects short frames and clipping every utterance's
+                # end is worse than a few milliseconds of silence.
+                for wire_frame in session.codec.encode(chunk):
+                    await websocket.send(wire_frame)
                 
                 # Fire-and-forget non-blocking telemetry dispatch (eliminating sequential I/O bottlenecks over HTTPS)
                 rms_val = compute_rms_normalized(chunk)
@@ -362,12 +371,20 @@ async def handle_protocol_client(websocket):
     token = str(hello_data.get("token", ""))
     session_id = str(uuid.uuid4())
 
+    try:
+        codec = codec_from_hello(hello_data)
+    except CodecError as err:
+        logger.error(f"🚫 [PROTOCOL] {err}")
+        await websocket.close(1008, str(err))
+        return
+
     session = ClientSession(
         device_id=device_id,
         client_id=client_id,
         token=token,
         session_id=session_id,
         protocol_ws=websocket,
+        codec=codec,
     )
     sessions[session_id] = session
 
@@ -375,8 +392,12 @@ async def handle_protocol_client(websocket):
         "type": "hello",
         "transport": "websocket",
         "session_id": session_id,
-        "audio_params": {"sample_rate": 16000, "frame_duration": 60}
+        "audio_params": {"format": codec.name,
+                         "sample_rate": codec.sample_rate,
+                         "frame_duration": codec.frame_ms}
     }))
+    logger.info(f"🎧 [PROTOCOL:{session_id[:8]}...] Audio format negotiated: {codec.name} "
+                f"@{codec.sample_rate}Hz/{codec.frame_ms}ms")
     logger.info(f"🤝 [PROTOCOL:{session_id[:8]}...] Handshake complete with device '{device_id}' -> Assigned session '{session_id[:8]}...'")
 
     # Initialize Gemini Live session if in gemini-live mode
@@ -394,7 +415,8 @@ async def handle_protocol_client(websocket):
 
             async def send_audio_to_firmware(pcm_bytes: bytes) -> None:
                 try:
-                    await websocket.send(pcm_bytes)
+                    for wire_frame in session.codec.encode(pcm_bytes):
+                        await websocket.send(wire_frame)
                 except (websockets.exceptions.WebSocketException, ConnectionError, RuntimeError):
                     pass
 
@@ -484,6 +506,14 @@ async def handle_protocol_client(websocket):
     try:
         async for message in websocket:
             if isinstance(message, bytes):
+                # Decode at the edge: past this point the whole server is PCM16 and
+                # no backend needs to know which kind of client it is talking to.
+                try:
+                    message = session.codec.decode(message)
+                except Exception as err:  # noqa: BLE001 - a bad frame must not kill the session
+                    logger.warning(f"⚠️ [SERVER:RX:{session_id[:8]}...] dropped undecodable "
+                                   f"{session.codec.name} frame ({len(message)}B): {err}")
+                    continue
                 rms_val = compute_rms_normalized(message)
                 dispatch_monitor(session, {"type": "uplink_rms", "rms": rms_val})
 

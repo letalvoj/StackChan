@@ -5,12 +5,14 @@ This is the colour bar at the bottom of the newspaper page: one command that
 exercises every protocol path in turn and prints a pass/fail table, so a device
 coming off the bench can be judged in about a minute without reading logs.
 
-It is a WebSocket *server*, because the device dials out -- see ARCHITECTURE.md
-§5.3. Point the device at this host and power it on:
+Under USB-NCM the *device* listens, so the normal mode is to dial it:
 
-    ./.venv/bin/python qa_selftest.py                 # all checks
-    ./.venv/bin/python qa_selftest.py --only mcp,tts  # a subset
-    ./.venv/bin/python qa_selftest.py --keep-open     # stay up, watch traffic
+    ./.venv/bin/python qa_selftest.py --connect 192.168.7.1   # USB-NCM device
+    ./.venv/bin/python qa_selftest.py                         # listen instead
+    ./.venv/bin/python qa_selftest.py --connect … --only mcp,tts
+
+Listen mode is kept for clients that dial out (the WASM harness, and the older
+SLIP/gateway path).
 
 Exit status is 0 only if every selected check passed, so it can gate a CI job or
 a factory fixture.
@@ -28,12 +30,11 @@ from dataclasses import dataclass, field
 
 import websockets
 
+from audio_codec import codec_from_hello
+
 HOST_DEFAULT = "0.0.0.0"
 PORT_DEFAULT = 8081
 
-# Matches the device's advertised audio_params. The device sends Opus; we do not
-# decode it here on purpose -- this harness checks that *frames flow*, which is
-# what distinguishes a wiring fault from a codec mismatch.
 SAMPLE_RATE = 16000
 FRAME_MS = 60
 
@@ -59,6 +60,9 @@ class Session:
     inbound_audio_frames: int = 0
     inbound_audio_bytes: int = 0
     mcp_replies: dict = field(default_factory=dict)
+    # Whatever the device advertised -- Opus from real firmware, PCM from the
+    # WASM harness. Downlink audio is encoded with it so the device can decode.
+    codec: object = None
     _mcp_seq: int = 0
 
     async def send(self, obj):
@@ -161,27 +165,22 @@ async def check_photo(s: Session) -> Check:
 
 
 async def check_tts_downlink(s: Session) -> Check:
-    """Speaker path. Sends the tts start/stop bracket with PCM frames in between.
+    """Speaker path. A 600 ms tone, encoded in whatever the device negotiated.
 
-    NOTE: the device decodes Opus, so unless the gateway has learned to encode it
-    (TASKS.md P0) you should expect silence or noise from the speaker even when
-    this check passes -- it verifies framing and the tts state machine, not audio
-    fidelity. That distinction is deliberate: it isolates a wiring fault from the
-    known codec gap."""
+    You should HEAR this. A pure 440 Hz tone is unmistakably synthetic, so silence
+    or noise means a real fault rather than an ambiguous result."""
     t0 = time.monotonic()
     await s.send({"session_id": s.session_id, "type": "tts", "state": "start",
-                  "sample_rate": SAMPLE_RATE})
+                  "sample_rate": s.codec.sample_rate})
     await s.send({"session_id": s.session_id, "type": "tts", "state": "sentence_start",
                   "text": "StackChan self test"})
-    pcm = tone_pcm16(600)
-    frame_bytes = int(SAMPLE_RATE * FRAME_MS / 1000) * 2
-    sent = 0
-    for off in range(0, len(pcm) - frame_bytes, frame_bytes):
-        await s.ws.send(pcm[off:off + frame_bytes])
-        sent += 1
-        await asyncio.sleep(FRAME_MS / 1000.0)
+
+    frames = s.codec.encode(tone_pcm16(600))
+    for frame in frames:
+        await s.ws.send(frame)
+        await asyncio.sleep(s.codec.frame_ms / 1000.0)
     await s.send({"session_id": s.session_id, "type": "tts", "state": "stop"})
-    return Check("tts.downlink", f"{sent} frames sent; codec is Opus, see TASKS.md",
+    return Check("tts.downlink", f"{len(frames)} {s.codec.name} frames sent — listen for a tone",
                  "PASS", time.monotonic() - t0)
 
 
@@ -248,6 +247,7 @@ async def run_session(ws, path, selected, verbose, keep_open):
         await ws.close()
         return
 
+    # Identical either way: whoever owns the socket, the device still speaks first.
     raw = await asyncio.wait_for(ws.recv(), timeout=30)
     hello = json.loads(raw)
     if hello.get("type") != "hello":
@@ -256,17 +256,22 @@ async def run_session(ws, path, selected, verbose, keep_open):
         return
 
     session_id = str(uuid.uuid4())
-    s = Session(ws=ws, session_id=session_id, device_id=hello.get("device_id", "?"))
+    codec = codec_from_hello(hello)
+    s = Session(ws=ws, session_id=session_id,
+                device_id=hello.get("device_id", "?"), codec=codec)
 
     # transport MUST be "websocket": the device rejects anything else outright.
     await ws.send(json.dumps({
         "type": "hello",
         "transport": "websocket",
         "session_id": session_id,
-        "audio_params": {"sample_rate": SAMPLE_RATE, "frame_duration": FRAME_MS},
+        "audio_params": {"format": codec.name,
+                         "sample_rate": codec.sample_rate,
+                         "frame_duration": codec.frame_ms},
     }))
 
-    print(f"\n{BOLD}device {s.device_id}{RESET}  session {session_id[:8]}")
+    print(f"\n{BOLD}device {s.device_id}{RESET}  session {session_id[:8]}  "
+          f"audio {codec.name}@{codec.sample_rate}Hz/{codec.frame_ms}ms")
     print(f"{DIM}  device hello: {json.dumps(hello)[:150]}{RESET}\n")
 
     task = asyncio.create_task(reader(s, verbose))
@@ -310,6 +315,9 @@ EXIT_CODE = 1   # until a session actually completes
 async def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--connect", metavar="HOST",
+                    help="dial a device that is listening (USB-NCM: 192.168.7.1) "
+                         "instead of waiting for one to dial us")
     ap.add_argument("--host", default=HOST_DEFAULT)
     ap.add_argument("--port", type=int, default=PORT_DEFAULT)
     ap.add_argument("--only", default="", help="comma-separated subset: " + ",".join(CHECKS))
@@ -334,10 +342,24 @@ async def main():
             if not args.keep_open:
                 done.set()
 
-    print(f"{BOLD}StackChan QA harness{RESET} listening on ws://{args.host}:{args.port}/ws")
+    print(f"{BOLD}StackChan QA harness{RESET}")
     print(f"{DIM}checks: {', '.join(selected)}{RESET}")
-    print(f"{DIM}waiting for the device to connect (power-cycle it if nothing happens)…{RESET}")
 
+    if args.connect:
+        url = f"ws://{args.connect}:{args.port}/ws"
+        print(f"{DIM}dialling {url}…{RESET}")
+        try:
+            async with websockets.connect(url, max_size=None, open_timeout=30) as ws:
+                await run_session(ws, "/ws", selected, args.verbose, args.keep_open)
+        except OSError as exc:
+            print(f"{RED}could not reach {url}: {exc}{RESET}")
+            print(f"{DIM}is the device plugged in and did the host take a DHCP lease? "
+                  f"see TESTING.md §4{RESET}")
+            return 1
+        return EXIT_CODE
+
+    print(f"{DIM}listening on ws://{args.host}:{args.port}/ws{RESET}")
+    print(f"{DIM}waiting for the device to connect (power-cycle it if nothing happens)…{RESET}")
     async with websockets.serve(handler, args.host, args.port):
         await done.wait()
     return EXIT_CODE
