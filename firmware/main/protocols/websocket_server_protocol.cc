@@ -160,6 +160,27 @@ esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
+    // Adopt the socket on EVERY invocation, not just the handshake. The HTTP_GET branch
+    // below turned out never to run on this IDF version, so client_fd_ stayed -1, every
+    // SendFrame() bailed at its first check, and the device could receive but never
+    // reply -- no hello, no MCP results. Capturing it here makes the send path depend on
+    // having seen any frame at all rather than on handshake-dispatch semantics.
+    int active_fd = httpd_req_to_sockfd(req);
+    if (active_fd >= 0 && self->client_fd_.exchange(active_fd) != active_fd) {
+        ESP_LOGI(TAG, "adopted host socket fd=%d", active_fd);
+        // Greet from here too, for the same reason: the handshake branch never runs, so
+        // arming the timer there meant the hello was never sent either. Deferred rather
+        // than sent inline because httpd still owns the session inside the handler.
+        self->audio_channel_opened_ = false;
+        xEventGroupClearBits(self->event_group_, WS_SERVER_SERVER_HELLO_EVENT);
+        self->pending_hello_fd_ = active_fd;
+        esp_timer_stop(self->hello_timer_);
+        esp_timer_start_once(self->hello_timer_, 20 * 1000);
+        if (self->on_connected_) {
+            self->on_connected_();
+        }
+    }
+
     if (req->method == HTTP_GET) {
         // The WebSocket handshake just completed; no payload yet.
         int fd = httpd_req_to_sockfd(req);
