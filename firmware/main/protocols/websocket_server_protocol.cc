@@ -246,11 +246,17 @@ bool WebsocketServerProtocol::SendFrame(httpd_ws_type_t type, const uint8_t* dat
     frame.payload = const_cast<uint8_t*>(data);
     frame.len     = len;
 
-    std::lock_guard<std::mutex> lock(tx_mutex_);
-    esp_err_t err = httpd_ws_send_frame_async(server_, fd, &frame);
+    esp_err_t err;
+    {
+        std::lock_guard<std::mutex> lock(tx_mutex_);
+        err = httpd_ws_send_frame_async(server_, fd, &frame);
+    }
     if (err != ESP_OK) {
         // A send failure on an established socket means the host is gone; httpd's
         // close_fn does not always fire promptly enough to notice on its own.
+        //
+        // Notify *outside* the lock: DropClient runs application callbacks, and
+        // tx_mutex_ is not recursive, so any handler that sends would deadlock.
         ESP_LOGW(TAG, "send failed (%s); dropping host", esp_err_to_name(err));
         DropClient(true);
         return false;

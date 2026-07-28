@@ -37,6 +37,10 @@ class AudioCodec:
     name = "abstract"
 
     def __init__(self, sample_rate=DEFAULT_SAMPLE_RATE, frame_ms=DEFAULT_FRAME_MS):
+        if sample_rate <= 0:
+            raise CodecError(f"sample_rate must be positive, got {sample_rate}")
+        if frame_ms <= 0:
+            raise CodecError(f"frame_duration must be positive, got {frame_ms}")
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
 
@@ -86,8 +90,23 @@ class OpusCodec(AudioCodec):
 
     name = "opus"
 
+    # libopus accepts only these; anything else fails deep inside the C library with
+    # an opaque "invalid argument", which used to escape as a raw OpusError.
+    SUPPORTED_RATES = (8000, 12000, 16000, 24000, 48000)
+    SUPPORTED_FRAME_MS = (10, 20, 40, 60)      # 2.5/5 ms exist but are unusable here
+
     def __init__(self, sample_rate=DEFAULT_SAMPLE_RATE, frame_ms=DEFAULT_FRAME_MS):
         super().__init__(sample_rate, frame_ms)
+        if sample_rate not in self.SUPPORTED_RATES:
+            raise CodecError(
+                f"Opus does not support {sample_rate} Hz; "
+                f"use one of {', '.join(map(str, self.SUPPORTED_RATES))}"
+            )
+        if frame_ms not in self.SUPPORTED_FRAME_MS:
+            raise CodecError(
+                f"Opus frame_duration {frame_ms} ms is not on the grid; "
+                f"use one of {', '.join(map(str, self.SUPPORTED_FRAME_MS))}"
+            )
         try:
             import opuslib
         except ImportError as exc:      # pragma: no cover - environment dependent
@@ -98,11 +117,30 @@ class OpusCodec(AudioCodec):
 
         # VOIP tuning matches what the firmware encoder targets; APPLICATION_AUDIO
         # would add latency this path cannot afford.
-        self._encoder = opuslib.Encoder(sample_rate, 1, "voip")
-        self._decoder = opuslib.Decoder(sample_rate, 1)
+        try:
+            self._encoder = opuslib.Encoder(sample_rate, 1, "voip")
+            self._decoder = opuslib.Decoder(sample_rate, 1)
+        except Exception as exc:        # noqa: BLE001 - opuslib raises its own type
+            raise CodecError(f"could not initialise Opus at {sample_rate} Hz: {exc}") from exc
 
     def decode(self, frame: bytes) -> bytes:
-        return self._decoder.decode(frame, self.samples_per_frame)
+        if not frame:
+            raise CodecError("empty Opus frame")
+        try:
+            pcm = self._decoder.decode(frame, self.samples_per_frame)
+        except Exception as exc:        # noqa: BLE001 - opuslib raises its own type
+            raise CodecError(f"undecodable Opus frame ({len(frame)} bytes): {exc}") from exc
+
+        # Opus decodes a shorter packet happily and returns fewer samples. Letting that
+        # through would forward, say, 640 bytes where the pipeline expects 1920 --
+        # audio that is subtly wrong rather than obviously broken. Say so instead.
+        if len(pcm) != self.bytes_per_frame:
+            raise CodecError(
+                f"frame decoded to {len(pcm)} bytes, expected {self.bytes_per_frame} "
+                f"({self.frame_ms} ms @ {self.sample_rate} Hz) -- the peer is probably "
+                f"using a different frame_duration than it advertised"
+            )
+        return pcm
 
     def encode(self, pcm: bytes) -> list:
         step = self.bytes_per_frame
@@ -125,22 +163,46 @@ def for_format(fmt, sample_rate=DEFAULT_SAMPLE_RATE, frame_ms=DEFAULT_FRAME_MS) 
     and defaulting the other way would turn a missing field into garbage audio
     rather than an obvious error.
     """
-    key = (fmt or "pcm").lower()
+    if fmt is None:
+        fmt = "pcm"
+    if not isinstance(fmt, str):
+        raise CodecError(f"audio format must be a string, got {type(fmt).__name__}: {fmt!r}")
     try:
-        return _REGISTRY[key](sample_rate, frame_ms)
+        cls = _REGISTRY[fmt.lower()]
     except KeyError:
         raise CodecError(
             f"unsupported audio format {fmt!r}; known: {', '.join(sorted(_REGISTRY))}"
         ) from None
+    return cls(sample_rate, frame_ms)
+
+
+def _positive_int(value, default, label):
+    """Coerce a client-supplied number, tolerating quoted digits but nothing worse."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise CodecError(f"{label} must be a number, got {value!r}") from None
 
 
 def codec_from_hello(hello: dict) -> AudioCodec:
-    """Pick a codec from a client's `hello`, tolerating a missing audio_params."""
-    params = hello.get("audio_params") or {}
+    """Pick a codec from a client's `hello`.
+
+    Everything here is attacker- or bug-controlled, and the caller guards this with
+    `except CodecError`, so any other exception type escaping would take down the
+    connection handler instead of closing the socket cleanly.
+    """
+    params = hello.get("audio_params")
+    if params is None or params == {}:
+        params = {}
+    elif not isinstance(params, dict):
+        raise CodecError(f"audio_params must be an object, got {type(params).__name__}")
+
     return for_format(
         params.get("format"),
-        int(params.get("sample_rate") or DEFAULT_SAMPLE_RATE),
-        int(params.get("frame_duration") or DEFAULT_FRAME_MS),
+        _positive_int(params.get("sample_rate"), DEFAULT_SAMPLE_RATE, "sample_rate"),
+        _positive_int(params.get("frame_duration"), DEFAULT_FRAME_MS, "frame_duration"),
     )
 
 

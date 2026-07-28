@@ -189,7 +189,7 @@ async def check_mic_uplink(s: Session, seconds=5.0) -> Check:
 
     Make a noise at the device while this runs."""
     t0 = time.monotonic()
-    before = s.inbound_audio_frames
+    before, before_bytes = s.inbound_audio_frames, s.inbound_audio_bytes
     await s.send({"session_id": s.session_id, "type": "listen",
                   "state": "start", "mode": "manual"})
     print(f"{YELLOW}  ↳ speak to the device now ({seconds:.0f}s)…{RESET}")
@@ -201,7 +201,8 @@ async def check_mic_uplink(s: Session, seconds=5.0) -> Check:
     if frames == 0:
         return Check("mic.uplink", "no audio frames received from device", "FAIL",
                      time.monotonic() - t0)
-    return Check("mic.uplink", f"{frames} frames / {s.inbound_audio_bytes} bytes",
+    return Check("mic.uplink",
+                 f"{frames} frames / {s.inbound_audio_bytes - before_bytes} bytes",
                  "PASS", time.monotonic() - t0)
 
 

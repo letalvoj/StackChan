@@ -147,15 +147,50 @@ def test_server_announces_the_format_it_will_use(server):
         assert hello["audio_params"]["frame_duration"] == FRAME_MS
 
 
-def test_unknown_format_is_refused_not_silently_accepted(server):
+# Each of these used to escape serve.py's `except CodecError` as a different
+# exception type and take down the connection handler.
+HOSTILE_HELLOS = [
+    pytest.param({"format": "mp3"}, id="unknown-format"),
+    pytest.param({"format": 123}, id="format-is-a-number"),
+    pytest.param({"format": "opus", "sample_rate": 44100}, id="opus-unsupported-rate"),
+    pytest.param({"format": "opus", "sample_rate": "abc"}, id="sample_rate-not-a-number"),
+    pytest.param({"format": "opus", "frame_duration": 0}, id="zero-frame-duration"),
+]
+
+
+@pytest.mark.parametrize("audio_params", HOSTILE_HELLOS)
+def test_bad_hello_is_refused_cleanly(server, audio_params):
     async def go():
         async with websockets.connect(f"ws://127.0.0.1:{server}/ws") as ws:
             await ws.send(json.dumps({
                 "type": "hello", "version": 1, "transport": "websocket",
-                "device_id": "TE:ST:00:00:00:02",
-                "audio_params": {"format": "mp3"},
+                "device_id": "TE:ST:00:00:00:02", "audio_params": audio_params,
             }))
             with pytest.raises(websockets.exceptions.ConnectionClosed):
                 await asyncio.wait_for(ws.recv(), timeout=10)
 
     asyncio.run(go())
+
+
+def test_server_survives_a_hostile_client(server):
+    """The point of the whole robustness exercise: one bad client must not take the
+    server down for the next one."""
+    async def go():
+        for audio_params in [p.values[0] for p in HOSTILE_HELLOS]:
+            try:
+                async with websockets.connect(f"ws://127.0.0.1:{server}/ws") as ws:
+                    await ws.send(json.dumps({
+                        "type": "hello", "version": 1, "transport": "websocket",
+                        "device_id": "TE:ST:00:00:00:03", "audio_params": audio_params,
+                    }))
+                    await asyncio.wait_for(ws.recv(), timeout=10)
+            except websockets.exceptions.ConnectionClosed:
+                pass
+
+    asyncio.run(go())
+
+    # …and a well-formed client still gets a full turn afterwards.
+    codec = OpusCodec(SR, FRAME_MS)
+    hello, frames, _ = asyncio.run(_echo_turn(server, "opus", codec, speech_ms=180))
+    assert hello["audio_params"]["format"] == "opus"
+    assert frames, "server stopped serving audio after hostile clients"
