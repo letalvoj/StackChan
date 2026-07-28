@@ -28,6 +28,8 @@ SESSION / PRIVACY
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
 import os
 import sys
@@ -104,12 +106,15 @@ def resample(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
 # the firmware already serves, so there is no bespoke command vocabulary to keep in
 # sync -- the device remains the source of truth for what it can do.
 #
+# The camera is exposed as take_photo, but it maps to self.camera.CAPTURE, a tool added
+# in hal_mcp.cpp -- not upstream's self.camera.take_photo. Upstream captures the same
+# frame and then POSTs it to a remote VLM, returning that service's prose; the URL is a
+# call-home this project removes and is unset over USB anyway. Ours returns the JPEG as
+# an MCP image block, and the client hands the pixels to Gemini as realtime media so the
+# model looks at the photo itself rather than reading someone's description of it.
+#
 # Deliberately NOT exposed:
-#   self.camera.take_photo   -- its firmware handler POSTs the JPEG to a remote VLM
-#                               and returns prose. That is the call-home this project
-#                               exists to remove, and it is strictly worse than
-#                               letting a natively multimodal model see the pixels.
-#                               Needs a firmware path that returns the JPEG instead.
+#   self.camera.take_photo   -- the remote-VLM path described above.
 #   self.screen.set_theme    -- cosmetic, and easy for a chatty model to fiddle with.
 #   self.robot.*reminder*    -- scheduling wants persistence and a story about what
 #                               happens when the session ends. Later.
@@ -149,6 +154,17 @@ TOOLS = [
         # light and an expression channel cannot be the same LED. Re-add this block if you
         # would rather have mood than state.
         types.FunctionDeclaration(
+            name="take_photo",
+            description=(
+                "Look through your camera and see what is in front of you. Use this "
+                "whenever you are asked to look at something, or what you can see. "
+                "The image is given to you directly -- after calling this, describe "
+                "what you actually observe. If the subject is off to one side, point "
+                "your head with set_head_angles first, then take the photo."
+            ),
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        types.FunctionDeclaration(
             name="get_device_status",
             description=("Your own real-time status: battery, network, speaker volume, "
                          "screen brightness. Call this before changing volume or brightness."),
@@ -179,6 +195,9 @@ TOOLS = [
 MCP_NAMES = {
     "set_head_angles": "self.robot.set_head_angles",
     "get_head_angles": "self.robot.get_head_angles",
+    # Our own tool, registered in hal_mcp.cpp. NOT upstream's self.camera.take_photo,
+    # which POSTs the frame to a remote VLM and returns prose about it.
+    "take_photo": "self.camera.capture",
     "get_device_status": "self.get_device_status",
     "set_volume": "self.audio_speaker.set_volume",
     "set_brightness": "self.screen.set_brightness",
@@ -336,12 +355,59 @@ class Device:
 
 # ------------------------------------------------------------------------ bridge
 
-async def handle_tool_call(device: Device, call) -> types.FunctionResponse:
+def extract_jpeg(reply: dict) -> bytes | None:
+    """Pull the JPEG out of an MCP image result.
+
+    McpServer serialises image content double-encoded: the block is
+    {"type":"image","image":"<json string>"} where the inner string is itself
+    {"type":"image","mimeType":...,"data":"<base64>"}. Handle both that shape and the
+    flat one, so this keeps working if upstream ever tidies the nesting up.
+    """
+    for block in reply.get("result", {}).get("content", []):
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        inner = block.get("image")
+        if isinstance(inner, str):
+            try:
+                inner = json.loads(inner)
+            except json.JSONDecodeError:
+                inner = None
+        payload = inner if isinstance(inner, dict) else block
+        b64 = payload.get("data")
+        if b64:
+            try:
+                return base64.b64decode(b64)
+            except (ValueError, binascii.Error):
+                return None
+    return None
+
+
+async def handle_tool_call(device: Device, call, session) -> types.FunctionResponse:
     args = dict(call.args or {})
     mcp_name = MCP_NAMES.get(call.name)
     if mcp_name is None:
         return types.FunctionResponse(id=call.id, name=call.name,
                                       response={"error": f"unknown tool {call.name}"})
+
+    if call.name == "take_photo":
+        # Capture + JPEG encode on device takes a beat; the default timeout is too tight.
+        reply = await device.call(mcp_name, {}, timeout=25.0)
+        if "error" in reply:
+            return types.FunctionResponse(id=call.id, name=call.name,
+                                          response={"error": str(reply["error"])})
+        jpeg = extract_jpeg(reply)
+        if not jpeg:
+            return types.FunctionResponse(id=call.id, name=call.name,
+                                          response={"error": "camera returned no image"})
+        # The pixels go in as realtime media, NOT as the function response -- a tool
+        # result is text, and describing an image in text is exactly what we removed the
+        # remote VLM to avoid. The model sees the frame itself and answers from it.
+        print(f"  📷 {len(jpeg)} bytes of JPEG -> Gemini", flush=True)
+        await session.send_realtime_input(
+            media=types.Blob(data=jpeg, mime_type="image/jpeg"))
+        return types.FunctionResponse(
+            id=call.id, name=call.name,
+            response={"result": "Photo taken and sent to you. Describe what you see."})
 
     if call.name == "set_head_angles":
         args = {"yaw": int(args.get("yaw", LEAVE_ALONE)),
@@ -387,7 +453,7 @@ async def converse(device: Device, session):
                     await device.end_turn()
 
                 if response.tool_call:
-                    responses = [await handle_tool_call(device, c)
+                    responses = [await handle_tool_call(device, c, session)
                                  for c in response.tool_call.function_calls]
                     await session.send_tool_response(function_responses=responses)
 

@@ -57,6 +57,12 @@ public:
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);
 
+    // JPEG-encode the last Capture() and hand the bytes back to the caller instead of
+    // POSTing them to a remote VLM the way Explain() does. Same encoder, same frame --
+    // only the destination differs, so a connected host can see the actual pixels rather
+    // than someone else's prose about them. Empty string on failure.
+    std::string CaptureToJpeg();
+
     const uint8_t* GetFrameData()
     {
         return frame_.data;

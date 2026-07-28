@@ -1024,6 +1024,51 @@ bool StackChanCamera::SetVFlip(bool enabled)
  * @note 函数会等待之前的编码线程完成后再开始新的处理
  * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
  */
+std::string StackChanCamera::CaptureToJpeg()
+{
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
+    if (frame_.data == nullptr || frame_.len == 0) {
+        ESP_LOGE(TAG, "CaptureToJpeg: no frame; call Capture() first");
+        return {};
+    }
+
+    std::string jpeg;
+    jpeg.reserve(32 * 1024);
+    bool ok = false;
+
+    // Encoded on its own thread for the same reason Explain() does it: the encoder wants
+    // roughly 8 KB of stack, which is more headroom than the task dispatching MCP calls
+    // is guaranteed to have. Joined before returning, so the frame buffer it reads cannot
+    // be recycled underneath it.
+    std::thread worker([this, &jpeg, &ok]() {
+        uint16_t w = frame_.width ? frame_.width : 320;
+        uint16_t h = frame_.height ? frame_.height : 240;
+        ok = image_to_jpeg_cb(
+            frame_.data, frame_.len, w, h, frame_.format, 80,
+            [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+                // Append EVERY chunk. The callback's `index` is an output offset and the
+                // encoder may emit several; keying off index == 0 the way Explain() does
+                // silently truncates anything that does not fit one chunk.
+                auto out = static_cast<std::string*>(arg);
+                if (data != nullptr && len > 0) {
+                    out->append(static_cast<const char*>(data), len);
+                }
+                return len;
+            },
+            &jpeg);
+    });
+    worker.join();
+
+    if (!ok || jpeg.empty()) {
+        ESP_LOGE(TAG, "CaptureToJpeg: encode failed");
+        return {};
+    }
+    ESP_LOGI(TAG, "CaptureToJpeg: %u bytes", (unsigned)jpeg.size());
+    return jpeg;
+}
+
 std::string StackChanCamera::Explain(const std::string& question)
 {
     if (explain_url_.empty()) {

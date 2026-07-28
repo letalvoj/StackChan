@@ -6,8 +6,11 @@
 #include "hal.h"
 #include <mooncake_log.h>
 #include <mcp_server.h>
+#include <application.h>            // TaskPriorityReset
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include "board/hal_bridge.h"
+#include "board/stackchan_camera.h"
 
 using namespace stackchan;
 
@@ -145,5 +148,40 @@ void Hal::xiaozhi_mcp_init()
                            mclog::tagInfo(_tag, "stop_reminder: id={}", id);
                            tools::stop_reminder(id);
                            return true;
+                       });
+
+    // Photo straight to whoever is connected, as an MCP image content block.
+    //
+    // self.camera.take_photo (upstream, mcp_server.cc) captures the same frame but then
+    // POSTs it to explain_url_ and returns that service's prose. Two problems here: the
+    // URL is a call-home this project exists to remove and is unset over USB, and handing
+    // a multimodal model somebody else's text description throws away the actual pixels.
+    //
+    // ImageContent is already part of McpServer's ReturnValue, so this needs no bespoke
+    // wire format -- it serialises to {"type":"image","mimeType":"image/jpeg","data":...}
+    // with base64 the client can feed straight to a vision model.
+    mclog::tagInfo(_tag, "add camera.capture tool");
+    mcp_server.AddTool("self.camera.capture",
+                       "Take a photo with your camera and return the image itself. Use this "
+                       "whenever you are asked to look at something, or to see what is in "
+                       "front of you. Point your head first if the subject is to one side.",
+                       std::vector<Property>{}, [this](const PropertyList& properties) -> ReturnValue {
+                           auto camera = hal_bridge::board_get_camera();
+                           if (camera == nullptr) {
+                               throw std::runtime_error("No camera on this board");
+                           }
+                           // Capture runs at lowered priority upstream; keep that -- the
+                           // sensor read is long and must not starve audio.
+                           TaskPriorityReset priority_reset(1);
+                           if (!camera->Capture()) {
+                               throw std::runtime_error("Failed to capture photo");
+                           }
+                           auto jpeg = camera->CaptureToJpeg();
+                           if (jpeg.empty()) {
+                               throw std::runtime_error("Failed to encode photo");
+                           }
+                           mclog::tagInfo(_tag, "camera.capture: {} bytes of JPEG", jpeg.size());
+                           // McpServer takes ownership and frees it after serialising.
+                           return new ImageContent("image/jpeg", jpeg);
                        });
 }
