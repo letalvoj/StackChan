@@ -18,11 +18,16 @@ CONFIG_CONNECTION_TYPE_USB_NCM=y
 CONFIG_TINYUSB_NET_MODE_NCM=y
 # The device listens rather than dials, so esp_http_server needs WebSocket support.
 CONFIG_HTTPD_WS_SUPPORT=y
-# Kept ON deliberately. The two do not fight: USB-Serial-JTAG owns the PHY until
-# tinyusb_driver_install() switches it to OTG, so the boot log is readable over USB right
-# up to the moment networking comes up -- which is exactly where bring-up fails. After
-# that the port disappears and the rest of the log needs UART0.
+# Kept ON: USB-Serial-JTAG owns the PHY until tinyusb_driver_install() switches it to
+# OTG, so the early boot log is readable over USB before networking comes up.
 CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# Composite device: NCM *and* CDC-ACM on the same cable. Networking carries the protocol
+# while the CDC interface carries ESP_LOG, so the device stays debuggable after TinyUSB
+# takes the PHY. Without this, enabling USB networking makes the device go completely
+# silent -- which cost several blind flash cycles to learn.
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
 
 CONFIG_SEND_WAKE_WORD_DATA=n
 CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y

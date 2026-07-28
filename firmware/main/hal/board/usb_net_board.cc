@@ -264,6 +264,25 @@ bool UsbNetBoard::StartUsbNetwork() {
     ESP_LOGI(TAG, "USB adapter MAC %02x:%02x:%02x:%02x:%02x:%02x (host sees this as its peer)",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
+    // Composite: bring up a CDC-ACM interface alongside NCM and move the log console
+    // onto it. Otherwise taking the PHY for networking silences the device completely,
+    // and every bring-up problem has to be diagnosed by inference from the host side.
+    const tinyusb_config_cdcacm_t acm_cfg = {
+        .usb_dev = TINYUSB_USBDEV_0,
+        .cdc_port = TINYUSB_CDC_ACM_0,
+        .rx_unread_buf_sz = 256,
+        .callback_rx = nullptr,
+        .callback_rx_wanted_char = nullptr,
+        .callback_line_state_changed = nullptr,
+        .callback_line_coding_changed = nullptr,
+    };
+    if (tusb_cdc_acm_init(&acm_cfg) == ESP_OK) {
+        esp_tusb_init_console(TINYUSB_CDC_ACM_0);
+        ESP_LOGI(TAG, "log console moved to USB CDC-ACM (composite with NCM)");
+    } else {
+        ESP_LOGE(TAG, "CDC-ACM console init failed; device will be silent over USB");
+    }
+
     err = tinyusb_net_init(TINYUSB_USBDEV_0, &net_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_net_init failed: %s", esp_err_to_name(err));
