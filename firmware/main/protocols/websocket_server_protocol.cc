@@ -63,6 +63,25 @@ bool WebsocketServerProtocol::Start() {
     config.close_fn          = OnClientClosed;
     config.stack_size        = 8192;   // cJSON + the app's JSON handler run on this task
 
+    // TCP keepalive: the device's own detector for peers that vanished without a FIN.
+    //
+    // This is the unplugged-laptop and dead-SSH-tunnel case. Neither end sees a close,
+    // so without this the device holds client_fd_ forever, believing someone is there --
+    // and since we allow exactly one client, that ghost blocks nothing but confuses
+    // everything, right up until a reconnecting client evicts a descriptor nobody owns.
+    //
+    // Done at the TCP layer rather than by timing WebSocket traffic, because
+    // handle_ws_control_frames is false: httpd answers pings itself without invoking our
+    // handler, so ping activity never refreshes last_incoming_time_ and any silence
+    // timer we wrote would reap perfectly healthy idle clients.
+    //
+    // ~35 s to notice: 15 s idle, then 3 probes 5 s apart. Slow enough to be free,
+    // fast enough that a reconnect is not left waiting.
+    config.keep_alive_enable   = true;
+    config.keep_alive_idle     = 15;
+    config.keep_alive_interval = 5;
+    config.keep_alive_count    = 3;
+
     esp_err_t err = httpd_start(&server_, &config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
@@ -254,8 +273,21 @@ esp_err_t WebsocketServerProtocol::DebugResetHandler(httpd_req_t* req) {
     auto before = app.GetDeviceState();
 
     ESP_LOGW(TAG, "/debug/reset while %s", DeviceStateMachine::GetStateName(before));
-    if (self != nullptr && self->client_fd_.load() >= 0) {
-        self->DropClient(true);
+    if (self != nullptr) {
+        int fd = self->client_fd_.load();
+        if (fd >= 0) {
+            // Close the SOCKET, not just our bookkeeping. DropClient() alone clears
+            // client_fd_ and notifies the app, but leaves the TCP connection open --
+            // which manufactures precisely the ghost we are trying to eliminate: the
+            // device believes nobody is connected while the client sees a healthy
+            // socket and waits forever. A client that is being reset must be told.
+            self->DropClient(true);
+            esp_err_t closed = httpd_sess_trigger_close(self->server_, fd);
+            if (closed != ESP_OK) {
+                ESP_LOGW(TAG, "reset: could not close fd=%d: %s", fd,
+                         esp_err_to_name(closed));
+            }
+        }
     }
     app.SetDeviceState(kDeviceStateIdle);
 
