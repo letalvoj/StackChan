@@ -6,3 +6,9 @@ __pycache__/
 *.pyc
 .venv/
 wasm/.venv/
+
+# Secrets. .env is a committed template with no values in it; every real key
+# lives in .env.local. firmware/scan_secrets.py exists to catch slips here.
+.env.local
+.env.*.local
+
