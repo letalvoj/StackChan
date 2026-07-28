@@ -54,6 +54,24 @@ void AvatarController::CreateIdleMotionModifier() {
 
 void AvatarController::SetStatus(const char* status) {
     auto& stackchan = GetStackChan();
+
+    // Readiness is a fact about xiaozhi, not about the avatar existing, so latch it
+    // BEFORE the guard below. It used to live inside the STANDBY branch, which sits
+    // after that early return -- and the tap-to-talk handler consults this flag, so
+    // dropping the first STANDBY meant every tap was silently ignored for the rest of
+    // the boot, with no log line to show for it.
+    //
+    // That is exactly what the USB path does: it skips the Mooncake launcher and goes
+    // straight into xiaozhi (main.cpp), so the state machine reaches idle and fires
+    // SetStatus(STANDBY) before SetupUI() has built the avatar. The launcher path
+    // happened to be slow enough to hide the race.
+#ifndef __EMSCRIPTEN__
+    if (strcmp(status, Lang::Strings::STANDBY) == 0 && !_is_xiaozhi_ready) {
+        _is_xiaozhi_ready = true;
+        ESP_LOGI(TAG, "xiaozhi ready; face taps now toggle chat");
+    }
+#endif
+
     if (!stackchan.hasAvatar()) {
         ESP_LOGE(TAG, "Avatar is invalid in SetStatus");
         return;

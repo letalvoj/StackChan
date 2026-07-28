@@ -72,7 +72,20 @@ private:
     std::atomic<int> pending_hello_fd_{-1};
     esp_timer_handle_t hello_timer_ = nullptr;
 
+    // Cheap traffic counters for /debug. Relaxed atomics: they are diagnostics, and
+    // paying for ordering on the audio path to make a status page prettier is a bad
+    // trade.
+    std::atomic<uint32_t> frames_rx_{0};
+    std::atomic<uint32_t> frames_tx_{0};
+    std::atomic<uint32_t> send_failures_{0};
+    std::atomic<int> last_send_err_{0};
+
     static esp_err_t WsHandler(httpd_req_t* req);
+
+    // GET /debug -- read-only status as JSON. Registered on the same server as /ws but
+    // deliberately independent of it: it never touches client_fd_, so polling it cannot
+    // evict whichever client currently owns the session.
+    static esp_err_t DebugHandler(httpd_req_t* req);
     static void OnClientClosed(httpd_handle_t hd, int sockfd);
     static void SendHelloWork(void* arg);
 

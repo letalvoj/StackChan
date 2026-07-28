@@ -11,8 +11,13 @@
 #include "system_info.h"
 #include "audio/audio_service.h"
 #include "assets/lang_config.h"
+#include "application.h"
+#include "device_state_machine.h"
+#include "hal/board/hal_bridge.h"
 
 #include <esp_log.h>
+#include <esp_heap_caps.h>
+#include <cstdio>
 #include <cstring>
 #include <chrono>
 
@@ -79,6 +84,20 @@ bool WebsocketServerProtocol::Start() {
         httpd_stop(server_);
         server_ = nullptr;
         return false;
+    }
+
+    const httpd_uri_t debug_uri = {
+        .uri          = "/debug",
+        .method       = HTTP_GET,
+        .handler      = DebugHandler,
+        .user_ctx     = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol    = nullptr,
+    };
+    if (httpd_register_uri_handler(server_, &debug_uri) != ESP_OK) {
+        // Not fatal: losing the status page must never cost us the protocol.
+        ESP_LOGW(TAG, "could not register /debug");
     }
 
     const esp_timer_create_args_t hello_args = {
@@ -152,6 +171,60 @@ void WebsocketServerProtocol::DropClient(bool notify) {
     if (notify && on_disconnected_) {
         on_disconnected_();
     }
+}
+
+esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
+    auto self = static_cast<WebsocketServerProtocol*>(req->user_ctx);
+
+    // Everything here is read-only and none of it touches client_fd_, so a monitor can
+    // poll this endpoint continuously while a gateway holds the session. That property
+    // is the whole point: the tooling that tells you why the session is broken must not
+    // be the thing that breaks it.
+    int fd = (self != nullptr) ? self->client_fd_.load() : -1;
+    auto& app = Application::GetInstance();
+    auto state = app.GetDeviceState();
+
+    char body[640];
+    int n = snprintf(body, sizeof(body),
+        "{"
+        // No %llu here on purpose: CONFIG_LIBC_NEWLIB_NANO_FORMAT drops long long
+        // support, so the conversion consumes the wrong number of vararg bytes and every
+        // later %s reads a misaligned pointer -- which dereferences garbage and panics.
+        // Seconds as a plain long covers 68 years of uptime.
+        "\"uptime_s\":%lu,"
+        "\"version\":\"%s\","
+        "\"device_state\":\"%s\","
+        "\"xiaozhi_ready\":%s,"
+        "\"client_fd\":%d,"
+        "\"has_client\":%s,"
+        "\"audio_channel_open\":%s,"
+        "\"frames_rx\":%lu,"
+        "\"frames_tx\":%lu,"
+        "\"send_failures\":%lu,"
+        "\"last_send_err\":\"%s\","
+        "\"heap_free\":%lu,"
+        "\"heap_min\":%lu"
+        "}",
+        (unsigned long)(esp_timer_get_time() / 1000000),
+        FIRMWARE_VERSION,
+        DeviceStateMachine::GetStateName(state),
+        // The flag behind tap-to-talk. If this is false, face taps are being dropped
+        // before they ever reach the application -- which cost a debugging session to
+        // work out precisely because nothing surfaced it.
+        hal_bridge::is_xiaozhi_ready() ? "true" : "false",
+        fd,
+        fd >= 0 ? "true" : "false",
+        (self != nullptr && self->audio_channel_opened_) ? "true" : "false",
+        (unsigned long)(self ? self->frames_rx_.load() : 0),
+        (unsigned long)(self ? self->frames_tx_.load() : 0),
+        (unsigned long)(self ? self->send_failures_.load() : 0),
+        esp_err_to_name(self ? self->last_send_err_.load() : 0),
+        (unsigned long)esp_get_free_heap_size(),
+        (unsigned long)esp_get_minimum_free_heap_size());
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, body, n > 0 ? n : 0);
 }
 
 esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
@@ -285,6 +358,7 @@ esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
     }
 
     self->last_incoming_time_ = std::chrono::steady_clock::now();
+    self->frames_rx_.fetch_add(1, std::memory_order_relaxed);
     if (frame.type == HTTPD_WS_TYPE_TEXT) {
         self->HandleTextFrame(std::string(reinterpret_cast<char*>(buf), frame.len));
     } else if (frame.type == HTTPD_WS_TYPE_BINARY) {
@@ -369,6 +443,12 @@ bool WebsocketServerProtocol::SendFrame(httpd_ws_type_t type, const uint8_t* dat
     {
         std::lock_guard<std::mutex> lock(tx_mutex_);
         err = httpd_ws_send_frame_async(server_, fd, &frame);
+    }
+    if (err == ESP_OK) {
+        frames_tx_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        send_failures_.fetch_add(1, std::memory_order_relaxed);
+        last_send_err_.store(err, std::memory_order_relaxed);
     }
     if (err != ESP_OK) {
         // A send failure on an established socket means the host is gone; httpd's

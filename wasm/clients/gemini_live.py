@@ -142,22 +142,12 @@ TOOLS = [
             description="Where your head is pointing right now, in degrees.",
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
         ),
-        types.FunctionDeclaration(
-            name="set_led_color",
-            description=(
-                "Set your LED colour to match your mood. Values 0-168. "
-                "Red=168,0,0  green=0,168,0  blue=0,0,168  warm white=100,100,100  off=0,0,0."
-            ),
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "red": types.Schema(type=types.Type.INTEGER),
-                    "green": types.Schema(type=types.Type.INTEGER),
-                    "blue": types.Schema(type=types.Type.INTEGER),
-                },
-                required=["red", "green", "blue"],
-            ),
-        ),
+        # set_led_color is deliberately NOT exposed. The firmware already uses the LED as
+        # the conversation-state indicator -- green listening, blue speaking, off idle
+        # (avatar_controller.cc) -- and a model told to "show your mood" overwrites it,
+        # which reads as the state machine being broken when it is working fine. A status
+        # light and an expression channel cannot be the same LED. Re-add this block if you
+        # would rather have mood than state.
         types.FunctionDeclaration(
             name="get_device_status",
             description=("Your own real-time status: battery, network, speaker volume, "
@@ -189,7 +179,6 @@ TOOLS = [
 MCP_NAMES = {
     "set_head_angles": "self.robot.set_head_angles",
     "get_head_angles": "self.robot.get_head_angles",
-    "set_led_color": "self.robot.set_led_color",
     "get_device_status": "self.get_device_status",
     "set_volume": "self.audio_speaker.set_volume",
     "set_brightness": "self.screen.set_brightness",
@@ -214,6 +203,11 @@ class Device:
         self._pending: dict[int, asyncio.Future] = {}
         self.mic = asyncio.Queue()
         self.listening = asyncio.Event()
+        # Encoded frames waiting to go out, drained by pace() at real time. Gemini
+        # produces audio far faster than realtime; the device decodes at exactly
+        # realtime, so anything sent eagerly piles into its queue and gets dropped.
+        self.tx = asyncio.Queue()
+        self._turn_ending = False
 
     async def connect(self):
         self.ws = await websockets.connect(self.url, open_timeout=20, max_size=None)
@@ -274,19 +268,70 @@ class Device:
             self._pending.pop(req_id, None)
             return {"error": {"message": f"{mcp_name} timed out"}}
 
-    async def speak(self, pcm24: bytes, first: bool):
-        """Play Gemini's audio through the device speaker."""
-        pcm = resample(pcm24, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
-        if first:
-            await self.ws.send(json.dumps({"session_id": self.session_id, "type": "tts",
-                                           "state": "start",
-                                           "sample_rate": self.codec.sample_rate}))
-        for frame in self.codec.encode(pcm):
-            await self.ws.send(frame)
+    async def enqueue_audio(self, pcm24: bytes):
+        """Resample + encode OFF the event loop, then queue for paced sending.
 
-    async def stop_speaking(self):
-        await self.ws.send(json.dumps({"session_id": self.session_id,
-                                       "type": "tts", "state": "stop"}))
+        Both steps are CPU-bound: the resampler is pure Python (see resample) and Opus
+        encoding is a C call that still blocks. Doing them inline stalls the whole
+        client -- including the microphone uplink, since it shares this event loop.
+        That made the choppiness bidirectional rather than just an output problem.
+        """
+        def work():
+            pcm = resample(pcm24, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
+            return self.codec.encode(pcm)
+
+        for frame in await asyncio.to_thread(work):
+            self.tx.put_nowait(frame)
+
+    async def pace(self):
+        """Drain the queue at exactly one frame per frame_ms. The whole fix.
+
+        Sending faster than this is what made playback choppy: the device decodes in
+        real time, so an eager sender just overruns its queue and the surplus is
+        discarded. Timing off a monotonic deadline rather than sleeping frame_ms each
+        pass keeps encode/send cost from accumulating into drift.
+        """
+        period = self.codec.frame_ms / 1000.0
+        speaking = False
+        deadline = None
+        while True:
+            frame = await self.tx.get()
+
+            if frame is None:                     # end-of-turn marker
+                if speaking:
+                    await self.ws.send(json.dumps({"session_id": self.session_id,
+                                                   "type": "tts", "state": "stop"}))
+                    speaking = False
+                deadline = None
+                continue
+
+            if not speaking:
+                await self.ws.send(json.dumps({
+                    "session_id": self.session_id, "type": "tts", "state": "start",
+                    "sample_rate": self.codec.sample_rate}))
+                speaking = True
+                deadline = asyncio.get_running_loop().time()
+
+            await self.ws.send(frame)
+            deadline += period
+            delay = deadline - asyncio.get_running_loop().time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            else:
+                # We fell behind (a slow encode, a long tool call). Reset rather than
+                # burst to catch up -- bursting is the very thing that drops frames.
+                deadline = asyncio.get_running_loop().time()
+
+    async def end_turn(self):
+        await self.tx.put(None)
+
+    def drop_pending_audio(self):
+        """Barge-in: discard queued audio that has not been sent yet."""
+        while not self.tx.empty():
+            try:
+                self.tx.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
 # ------------------------------------------------------------------------ bridge
@@ -325,31 +370,28 @@ async def converse(device: Device, session):
                 audio=types.Blob(data=pcm, mime_type=f"audio/pcm;rate={GEMINI_SEND_RATE}"))
 
     async def downlink():
-        speaking = False
         while True:
             async for response in session.receive():
                 if response.data:
-                    await device.speak(response.data, first=not speaking)
-                    speaking = True
+                    await device.enqueue_audio(response.data)
                     continue
 
                 server = response.server_content
-                if server and server.interrupted and speaking:
-                    # The user talked over the model. Close the audio turn now; the
-                    # frames already queued on the device will finish, but nothing
-                    # further is sent.
-                    await device.stop_speaking()
-                    speaking = False
-                if server and server.turn_complete and speaking:
-                    await device.stop_speaking()
-                    speaking = False
+                if server and server.interrupted:
+                    # Barge-in: drop what has not gone out yet and close the turn.
+                    device.drop_pending_audio()
+                    await device.end_turn()
+                elif server and server.turn_complete:
+                    # Queued behind the audio, so the stop lands after the last frame
+                    # rather than truncating playback.
+                    await device.end_turn()
 
                 if response.tool_call:
                     responses = [await handle_tool_call(device, c)
                                  for c in response.tool_call.function_calls]
                     await session.send_tool_response(function_responses=responses)
 
-    await asyncio.gather(uplink(), downlink())
+    await asyncio.gather(uplink(), downlink(), device.pace())
 
 
 async def main():
