@@ -3,9 +3,10 @@
 For bringing a device up on the USB transport for the first time. Architecture is in
 `ARCHITECTURE.md` §5; this is the operational side.
 
-**Nothing here has been run against real hardware yet.** The firmware builds clean and
-the QA harness has been verified against a mock device, but the first person to plug in a
-board is doing the first real test. §4 exists because of that.
+**Nothing here has been run against real hardware yet.** The firmware builds clean, the
+QA harness is verified against a mock device, and the audio path has unit and end-to-end
+tests — but the first person to plug in a board is doing the first real test. §4 exists
+because of that.
 
 ---
 
@@ -50,10 +51,13 @@ Expected: `CONFIG_CONNECTION_TYPE_USB_NCM=y` and `CONFIG_TINYUSB_NET_MODE_NCM=y`
 ```
 I UsbNetBoard: USB adapter MAC 02:xx:xx:xx:xx:xx (host sees this as its peer)
 I UsbNetBoard: USB network up: device 192.168.7.1, host will be offered 192.168.7.2
-I UsbNetBoard: protocol endpoint pinned to ws://192.168.7.2:8081/ws
+I UsbNetBoard: waiting for a host to connect to ws://192.168.7.1:8081/ws
 I UsbNetBoard: USB cable attached; waiting for the host to take a DHCP lease
 I UsbNetBoard: Host took DHCP lease 192.168.7.2; USB link is usable
-I Application:  Using WebSocket protocol over USB networking
+I Application:  Using WebSocket server protocol over USB networking
+I WsServerProto: listening for a host on ws://<device>:8081/ws
+I WsServerProto: host connected (fd=54)
+I WsServerProto: session 4243f985 established (16000 Hz / 60 ms)
 I Application:  USB transport: skipping remote version/assets checks
 ```
 
@@ -96,7 +100,7 @@ It walks every protocol path and prints a pass/fail bar:
   PASS device.status   0.1s  {"content":[...]}
   PASS screen          2.3s  brightness 30/100/70 + theme dark/light applied
   PASS camera.photo    1.9s  {"content":[...]}
-  PASS tts.downlink    0.6s  9 frames sent; codec is Opus, see TASKS.md
+  PASS tts.downlink    0.6s  10 opus frames sent — listen for a tone
   PASS mic.uplink      5.5s  82 frames / 6560 bytes
 
   ███████  7/7 passed
@@ -115,9 +119,16 @@ Exit status is 0 only if everything passed, so it can gate a fixture or CI job.
 Useful flags:
 
 ```bash
-./.venv/bin/python qa_selftest.py --only mcp,status   # subset
-./.venv/bin/python qa_selftest.py --verbose           # echo every inbound frame
-./.venv/bin/python qa_selftest.py --keep-open         # stay connected and watch
+./.venv/bin/python qa_selftest.py --connect 192.168.7.1 --only mcp,status
+./.venv/bin/python qa_selftest.py --connect 192.168.7.1 --verbose      # echo every frame
+./.venv/bin/python qa_selftest.py --connect 192.168.7.1 --keep-open    # stay attached
+```
+
+No hardware? The mock mirrors the firmware, so the whole flow can be exercised dry:
+
+```bash
+./.venv/bin/python qa_mock_device.py --listen --port 8099 &
+./.venv/bin/python qa_selftest.py --connect 127.0.0.1 --port 8099
 ```
 
 ### Or run the real gateway
@@ -159,15 +170,21 @@ sudo dhclient -v usb0
 
 If that gets an address, the device side is fine and it is host network policy. As a
 workaround you can assign statically — `sudo ip addr add 192.168.7.2/24 dev usb0` — but
-note the firmware fires "connected" **on the DHCP lease**, so a static address means that
-event never fires and the device will never dial out. Prefer fixing DHCP.
+note the firmware treats the DHCP lease as "host is present", so a static address means
+that event never fires. The device still listens and you can still connect to it, but its
+status icon will read disconnected. Prefer fixing DHCP.
 
-### Link is up, but the device never connects to the harness
+### Link is up, but `--connect` cannot reach the device
 
-Check the endpoint matches: the firmware logs `protocol endpoint pinned to …` and it must
-be reachable from the device. From the host, `ss -lntp | grep 8081` should show the
-harness listening on `0.0.0.0`, not `127.0.0.1`. **Host firewall is a common culprit** —
-the device is on a new interface most firewall profiles treat as untrusted.
+The device is the server now, so check it from the host directly:
+
+```bash
+ping -c2 192.168.7.1 && curl -sv http://192.168.7.1:8081/ws 2>&1 | head -5
+```
+
+The firmware logs `listening for a host on ws://<device>:8081/ws` once httpd starts; if
+that line is absent the server never came up. **Host firewall is a common culprit** — the
+device sits on a new interface most firewall profiles treat as untrusted.
 
 ### `TX drop: host not draining USB`
 
@@ -176,10 +193,11 @@ load are survivable; a continuous stream means the host side is wedged.
 
 ### Everything passes but audio is silent or noise
 
-**Expected today.** The device sends and expects **Opus**; the gateway backends unpack raw
-PCM16, and nothing negotiates `format`. `tts.downlink` and `mic.uplink` verify that frames
-*flow*, not that they decode — that separation is deliberate so a wiring fault looks
-different from the known codec gap. Tracked as the top P0 in `TASKS.md`.
+No longer expected. The server reads the format out of the device's `hello` and
+transcodes, so a device advertising Opus gets Opus back. Check for
+`🎧 Audio format negotiated: opus@16000Hz/60ms` in the server log — if it says `pcm`
+against real firmware, the device's hello is wrong. Both directions are covered by
+`wasm/tests/test_serve_negotiation.py`.
 
 ### Device reboots or hangs when the host disconnects
 

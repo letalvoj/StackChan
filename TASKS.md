@@ -6,14 +6,15 @@ Captured during architectural design sessions. Items are roughly priority-ordere
 
 ## P0 — Active / In Progress
 
-- [x] **USB transport** — Superseded by CDC-**NCM**: the device is a USB network adapter
-      and runs the stock `WebsocketProtocol`, so there is no bespoke wire format at all.
+- [x] **USB transport** — CDC-**NCM**: the device is a USB network adapter and *listens*
+      on 192.168.7.1 for the host to connect (`WebsocketServerProtocol`), so it never
+      needs to know the host's address and there is no bespoke wire format.
       `CONFIG_CONNECTION_TYPE_USB_NCM`, on by default. The older SLIP path remains
       selectable as `CONFIG_CONNECTION_TYPE_USB_SLIP`. See `ARCHITECTURE.md` §5.
-      **Neither has been exercised against real hardware yet.**
+      **Not yet exercised against real hardware.**
 - [ ] **Bring up NCM on the physical device.** Follow `TESTING.md`: flash over UART (the
       USB console is gone under NCM), watch for the expected log sequence, then run
-      `wasm/qa_selftest.py` and check the bar is green. Confirm the host enumerates
+      `wasm/qa_selftest.py --connect 192.168.7.1` and check the bar is green. Confirm the host enumerates
       `usb0`, takes a DHCP lease of 192.168.7.2, and that replug is handled. Expect
       `tts` to produce an audible 440 Hz tone; the Opus gap is closed.
 - [x] **Gateway must decode Opus** — The device advertises and sends Opus
@@ -70,9 +71,8 @@ device-side equivalents are already fixed; the Python mirror is not.
       frame's tail as a whole frame whose first byte is misread as the type.
 - [ ] **Add CRC-16/CCITT to the frame** and reuse `BinaryProtocol3` as the audio payload
       header. Rationale and alternatives considered in `ARCHITECTURE.md` §5.5.
-- [ ] **Round-trip test for the SLIP framer.** A property test over
-      `encode`/`feed` would have caught both bugs above in minutes. The repo currently
-      has exactly one test (`firmware/tests/motion_math_test.cpp`).
+- [ ] **Round-trip test for the SLIP framer.** A property test over `encode`/`feed` would
+      have caught both bugs above in minutes — model it on `wasm/tests/test_audio_codec.py`.
 - [ ] **Commit a socat recipe.** `tcp_transport.py` and `gateway.py` both reference socat
       in their docstrings, but no script, Makefile target or README snippet actually
       constructs the bridge.
