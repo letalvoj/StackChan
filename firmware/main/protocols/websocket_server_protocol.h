@@ -21,6 +21,7 @@
 #include "protocol.h"
 
 #include <esp_http_server.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 
@@ -57,8 +58,15 @@ private:
     // httpd sends from its own task; SendAudio/SendText arrive from the main loop.
     std::mutex tx_mutex_;
 
+    // Captured at handshake time rather than re-read from client_fd_ when the greeting
+    // fires: httpd recycles socket numbers, so a close for a *previous* session can
+    // clear client_fd_ in between and leave a fresh host greeted by silence.
+    std::atomic<int> pending_hello_fd_{-1};
+    esp_timer_handle_t hello_timer_ = nullptr;
+
     static esp_err_t WsHandler(httpd_req_t* req);
     static void OnClientClosed(httpd_handle_t hd, int sockfd);
+    static void SendHelloWork(void* arg);
 
     void HandleTextFrame(const std::string& text);
     void HandleBinaryFrame(const uint8_t* data, size_t len);

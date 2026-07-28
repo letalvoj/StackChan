@@ -81,6 +81,20 @@ bool WebsocketServerProtocol::Start() {
         return false;
     }
 
+    const esp_timer_create_args_t hello_args = {
+        .callback = SendHelloWork,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ws_hello",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&hello_args, &hello_timer_) != ESP_OK) {
+        ESP_LOGE(TAG, "could not create the hello timer");
+        httpd_stop(server_);
+        server_ = nullptr;
+        return false;
+    }
+
     ESP_LOGI(TAG, "listening for a host on ws://<device>:%d/ws", CONFIG_USB_NET_LISTEN_PORT);
     return true;
 }
@@ -94,6 +108,39 @@ void WebsocketServerProtocol::OnClientClosed(httpd_handle_t hd, int sockfd) {
     }
     ESP_LOGW(TAG, "host disconnected (fd=%d)", sockfd);
     self->DropClient(true);
+}
+
+void WebsocketServerProtocol::SendHelloWork(void* arg) {
+    // The fd is captured at queue time rather than re-read from client_fd_: httpd
+    // recycles socket numbers, so a close_fn for a *previous* session can arrive on the
+    // same fd between the handshake and this work item running, clear client_fd_, and
+    // leave the freshly connected host greeted by silence.
+    auto self = static_cast<WebsocketServerProtocol*>(arg);
+    if (self == nullptr) {
+        return;
+    }
+    int fd = self->pending_hello_fd_.load();
+    if (fd < 0) {
+        return;
+    }
+    std::string hello = self->GetHelloMessage();
+
+    httpd_ws_frame_t frame = {};
+    frame.final   = true;
+    frame.type    = HTTPD_WS_TYPE_TEXT;
+    frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(hello.data()));
+    frame.len     = hello.size();
+
+    esp_err_t err;
+    {
+        std::lock_guard<std::mutex> lock(self->tx_mutex_);
+        err = httpd_ws_send_frame_async(self->server_, fd, &frame);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to greet host on fd=%d: %s", fd, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "greeted host on fd=%d", fd);
+    }
 }
 
 void WebsocketServerProtocol::DropClient(bool notify) {
@@ -126,12 +173,22 @@ esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
             self->on_connected_();
         }
 
-        // Greet immediately rather than waiting for OpenAudioChannel(). A host that has
-        // just connected should be able to complete the handshake and start driving the
-        // device straight away; deferring the hello until someone presses talk would
-        // leave tools connected to a silent socket with nothing to identify.
+        // Greet as soon as the host connects, so a tool that attaches has something to
+        // identify without waiting for someone to press talk.
+        //
+        // Queued, NOT sent inline: httpd still owns this session inside the handshake
+        // handler, so httpd_ws_send_frame_async() fails here -- and SendFrame's error
+        // path would then drop the very client we just accepted. httpd_queue_work runs
+        // it on the server task once the handler has returned.
         xEventGroupClearBits(self->event_group_, WS_SERVER_SERVER_HELLO_EVENT);
-        self->SendText(self->GetHelloMessage());
+
+        // Deferred by a one-shot timer rather than httpd_queue_work(). Both avoid
+        // sending inline (httpd still owns the session here, so the async send fails),
+        // but queue_work routes through httpd's control socket on the loopback netif,
+        // which adds a dependency this path does not need. The esp_timer task is always
+        // there and cannot be starved by the server's own socket budget.
+        self->pending_hello_fd_ = fd;
+        esp_timer_start_once(self->hello_timer_, 20 * 1000);   // 20 ms
         return ESP_OK;
     }
 

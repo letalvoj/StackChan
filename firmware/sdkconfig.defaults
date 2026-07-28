@@ -13,15 +13,16 @@ CONFIG_BOARD_TYPE_M5STACK_STACK_CHAN=y
 # USB networking (CDC-NCM). The device enumerates as a network adapter rather than a
 # serial port, so the stock WebsocketProtocol runs over USB with no bespoke wire format.
 #
-# TinyUSB claims the USB-OTG peripheral on GPIO19/20, the same pin pair USB-Serial-JTAG
-# uses, so the USB console must be off or the two fight over the PHY. Logging stays on
-# UART0 (the primary console) -- note this means `idf.py monitor` needs the UART, not
-# the USB cable.
+# TinyUSB claims the USB-OTG peripheral on GPIO19/20, the same pins USB-Serial-JTAG uses.
 CONFIG_CONNECTION_TYPE_USB_NCM=y
 CONFIG_TINYUSB_NET_MODE_NCM=y
 # The device listens rather than dials, so esp_http_server needs WebSocket support.
 CONFIG_HTTPD_WS_SUPPORT=y
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Kept ON deliberately. The two do not fight: USB-Serial-JTAG owns the PHY until
+# tinyusb_driver_install() switches it to OTG, so the boot log is readable over USB right
+# up to the moment networking comes up -- which is exactly where bring-up fails. After
+# that the port disappears and the rest of the log needs UART0.
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
 CONFIG_SEND_WAKE_WORD_DATA=n
 CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y

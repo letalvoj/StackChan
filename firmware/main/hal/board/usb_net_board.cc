@@ -6,6 +6,7 @@
 #if CONFIG_CONNECTION_TYPE_USB_NCM
 
 #include "esp_network.h"
+#include "display.h"
 #include "assets/lang_config.h"
 #include "font_awesome.h"
 
@@ -149,6 +150,19 @@ void UsbNetBoard::OnDhcpLease(void* arg, esp_event_base_t base, int32_t id, void
     }
     ESP_LOGI(TAG, "Host took DHCP lease " IPSTR "; USB link is usable", IP2STR(&evt->ip));
 
+    // Put the address on the avatar's speech bubble. With no console over USB this is
+    // the only way to read it off the device, and it replaces the boot-time user-agent
+    // string that otherwise sits there untouched until the first conversation.
+    char bubble[64];
+    snprintf(bubble, sizeof(bubble), "connect to ws://%d.%d.%d.%d:%d/ws",
+             (int)((kDeviceIp >> 24) & 0xFF), (int)((kDeviceIp >> 16) & 0xFF),
+             (int)((kDeviceIp >> 8) & 0xFF), (int)(kDeviceIp & 0xFF),
+             CONFIG_USB_NET_LISTEN_PORT);
+    auto* display = Board::GetInstance().GetDisplay();
+    if (display != nullptr) {
+        display->SetChatMessage("system", bubble);
+    }
+
     // Only now can the host actually be reached, so this -- not USB mount -- is the
     // right moment to let the application open the protocol.
     self->OnNetworkEvent(NetworkEvent::Connected, "USB");
@@ -182,8 +196,12 @@ bool UsbNetBoard::StartUsbNetwork() {
 
     static esp_netif_ip_info_t ip_info = {};
     ip_info.ip.addr      = esp_netif_htonl(kDeviceIp);
-    ip_info.gw.addr      = esp_netif_htonl(kDeviceIp);
     ip_info.netmask.addr = esp_netif_htonl(kNetmask);
+    // gw deliberately left at 0.0.0.0. Setting it to our own address makes the DHCP
+    // server offer the device as the host's default route, and the host then tries to
+    // reach the whole internet through a desk robot. This link is a private /24 between
+    // exactly two peers and leads nowhere -- it must never look like a way out.
+    ip_info.gw.addr = 0;
 
     // DHCP_SERVER, not DHCP_CLIENT: there is no router on this link, so the device
     // hands the host its address. AUTOUP brings the interface up as soon as it exists.
@@ -251,6 +269,17 @@ bool UsbNetBoard::StartUsbNetwork() {
         ESP_LOGE(TAG, "tinyusb_net_init failed: %s", esp_err_to_name(err));
         return false;
     }
+
+    // Belt and braces alongside the zeroed gw: tell the DHCP server explicitly not to
+    // hand out a router or a DNS server. Without this the host installs a default route
+    // (and a resolver) pointing at the robot and its internet stops working -- which is
+    // exactly what happened the first time this ran on a real Mac. Options must be set
+    // before the server starts.
+    uint8_t offer_off = 0;
+    esp_netif_dhcps_option(netif_, ESP_NETIF_OP_SET,
+                           ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &offer_off, sizeof(offer_off));
+    esp_netif_dhcps_option(netif_, ESP_NETIF_OP_SET,
+                           ESP_NETIF_DOMAIN_NAME_SERVER, &offer_off, sizeof(offer_off));
 
     // The DHCP lease, not USB enumeration, is what tells us the host can be reached.
     // esp_netif registers this for any netif running a DHCP server, not just SoftAP.

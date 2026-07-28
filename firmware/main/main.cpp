@@ -26,8 +26,13 @@ extern "C" void app_main(void)
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
+    // LOCAL BENCH TWEAK (not for upstream): jump straight into protocol mode on boot so
+    // a host can drive the device over USB without anyone touching the screen. The
+    // launcher is skipped entirely; AI.AGENT is a one-way trapdoor out of Mooncake
+    // anyway (see ARCHITECTURE.md §6), so nothing is lost by not going through it.
     const bool skip_mooncake =
-        GetHAL().getXiaozhiConfig().startAiAgentOnBoot && GetHAL().getWarmRebootTarget() < 0;
+        (CONFIG_CONNECTION_TYPE_USB_NCM || GetHAL().getXiaozhiConfig().startAiAgentOnBoot) &&
+        GetHAL().getWarmRebootTarget() < 0;
 
     if (!skip_mooncake) {
         // Install apps
