@@ -32,6 +32,7 @@ import base64
 import binascii
 import json
 import os
+import random
 import sys
 import uuid
 from pathlib import Path
@@ -229,7 +230,14 @@ class Device:
         self._turn_ending = False
 
     async def connect(self):
-        self.ws = await websockets.connect(self.url, open_timeout=20, max_size=None)
+        # ping_interval/ping_timeout are the half-open detector. When an SSH tunnel dies
+        # or the laptop is unplugged, neither end sees a FIN -- TCP will hold a corpse
+        # open for many minutes, and the client sits there believing it is connected.
+        # WebSocket pings turn that silence into a prompt, reconnectable failure.
+        # close_timeout keeps teardown from stalling the reconnect loop.
+        self.ws = await websockets.connect(
+            self.url, open_timeout=15, max_size=None,
+            ping_interval=5, ping_timeout=15, close_timeout=5)
         await self.ws.send(json.dumps({
             "type": "hello", "transport": "websocket", "session_id": self.session_id,
             "audio_params": {"format": "opus", "sample_rate": GEMINI_SEND_RATE,
@@ -286,6 +294,14 @@ class Device:
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
             return {"error": {"message": f"{mcp_name} timed out"}}
+
+    async def close(self):
+        """Best-effort teardown. A link we are already abandoning must never raise."""
+        try:
+            if self.ws is not None:
+                await self.ws.close()
+        except Exception:
+            pass
 
     async def enqueue_audio(self, pcm24: bytes):
         """Resample + encode OFF the event loop, then queue for paced sending.
@@ -403,8 +419,12 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
         # result is text, and describing an image in text is exactly what we removed the
         # remote VLM to avoid. The model sees the frame itself and answers from it.
         print(f"  📷 {len(jpeg)} bytes of JPEG -> Gemini", flush=True)
+        # `video=`, not `media=`. media= serialises to realtime_input.media_chunks, which
+        # the Live API now rejects outright with a 1007 close -- killing the whole
+        # session, not just the photo. A single still frame counts as video here; the
+        # field name is about the modality lane, not about motion.
         await session.send_realtime_input(
-            media=types.Blob(data=jpeg, mime_type="image/jpeg"))
+            video=types.Blob(data=jpeg, mime_type="image/jpeg"))
         return types.FunctionResponse(
             id=call.id, name=call.name,
             response={"result": "Photo taken and sent to you. Describe what you see."})
@@ -485,19 +505,78 @@ async def main():
     )
 
     url = f"ws://{args.host}:{args.port}/ws"
-    print(f"connecting to {url} …", flush=True)
-    device = await Device(url).connect()
-    print("connected. Tap StackChan's face to start talking. Ctrl-C to quit.", flush=True)
+    await supervise(url, client, config, args)
 
+
+async def supervise(url, client, config, args):
+    """Outer loop: keep a device link alive forever, whatever happens to it.
+
+    This process is meant to run unattended behind an SSH tunnel, so *exiting is
+    always the wrong answer*. Every failure below is expected in normal operation,
+    not exceptional: the device reboots after a flash, the laptop is unplugged and
+    replugged, the tunnel dies and comes back, the model session is rejected.
+
+    Backoff is exponential with jitter and a 30 s cap. The jitter is not decoration --
+    without it, a device and a cloud-side client that restart together retry in
+    lockstep forever.
+    """
+    backoff = 0.5
+    first = True
+    while True:
+        device = None
+        try:
+            if first:
+                print(f"connecting to {url} …", flush=True)
+            device = await Device(url).connect()
+            backoff = 0.5                      # a good connection clears the penalty
+            first = False
+            print("connected. Tap StackChan's face to start talking. Ctrl-C to quit.",
+                  flush=True)
+            await run_link(device, client, config, args)
+        except asyncio.CancelledError:
+            raise
+        except BaseExceptionGroup as eg:
+            # TaskGroup wraps everything; report the first cause, not the group.
+            exc = eg.exceptions[0]
+            print(f"✗ device link lost: {type(exc).__name__}: {exc}", flush=True)
+        except Exception as exc:
+            # Connect itself failed -- device rebooting, tunnel down, nothing listening.
+            print(f"✗ device unreachable: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            if device is not None:
+                await device.close()
+
+        delay = backoff * (1.0 + random.random() * 0.3)
+        print(f"… reconnecting in {delay:.1f}s", flush=True)
+        await asyncio.sleep(delay)
+        backoff = min(backoff * 2, 30.0)
+
+
+async def run_link(device, client, config, args):
+    """One device connection's lifetime. Returns/raises when it ends."""
     async with asyncio.TaskGroup() as tg:
         tg.create_task(device.pump())
 
         async def run_session():
-            await device.listening.wait()
-            async with client.aio.live.connect(model=args.model, config=config) as session:
-                print(f"▶ Gemini Live session open ({args.model}, voice {args.voice})",
-                      flush=True)
-                await converse(device, session)
+            # One rejected frame used to take the whole client down with it, which meant
+            # a restart (and another tap) for every hiccup. Reconnect instead: the device
+            # link is untouched by a Gemini-side failure, so there is nothing to rebuild
+            # but the model session.
+            while True:
+                await device.listening.wait()
+                try:
+                    async with client.aio.live.connect(model=args.model,
+                                                       config=config) as session:
+                        print(f"▶ Gemini Live session open ({args.model}, "
+                              f"voice {args.voice})", flush=True)
+                        await converse(device, session)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(f"✗ session ended: {type(exc).__name__}: {exc}", flush=True)
+                    device.drop_pending_audio()
+                    await asyncio.sleep(2.0)
+                    print("… reconnecting; tap again if it stays quiet", flush=True)
 
         tg.create_task(run_session())
 

@@ -100,6 +100,19 @@ bool WebsocketServerProtocol::Start() {
         ESP_LOGW(TAG, "could not register /debug");
     }
 
+    const httpd_uri_t reset_uri = {
+        .uri          = "/debug/reset",
+        .method       = HTTP_POST,
+        .handler      = DebugResetHandler,
+        .user_ctx     = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol    = nullptr,
+    };
+    if (httpd_register_uri_handler(server_, &reset_uri) != ESP_OK) {
+        ESP_LOGW(TAG, "could not register /debug/reset");
+    }
+
     const esp_timer_create_args_t hello_args = {
         .callback = SendHelloWork,
         .arg = this,
@@ -224,6 +237,34 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, body, n > 0 ? n : 0);
+}
+
+esp_err_t WebsocketServerProtocol::DebugResetHandler(httpd_req_t* req) {
+    // Recovery of last resort, over HTTP rather than by hand. When the device is
+    // mounted somewhere awkward and reached through an SSH tunnel, "just power-cycle
+    // it" is an expensive instruction; this makes an unresponsive robot fixable from
+    // the same shell that noticed the problem.
+    //
+    // Drops any client and forces the state machine back to idle. Deliberately does
+    // NOT reboot: rebooting loses the log and the uptime, which are usually the only
+    // evidence of whatever went wrong.
+    auto self = static_cast<WebsocketServerProtocol*>(req->user_ctx);
+    auto& app = Application::GetInstance();
+    auto before = app.GetDeviceState();
+
+    ESP_LOGW(TAG, "/debug/reset while %s", DeviceStateMachine::GetStateName(before));
+    if (self != nullptr && self->client_fd_.load() >= 0) {
+        self->DropClient(true);
+    }
+    app.SetDeviceState(kDeviceStateIdle);
+
+    char body[160];
+    int n = snprintf(body, sizeof(body),
+                     "{\"was\":\"%s\",\"now\":\"%s\"}",
+                     DeviceStateMachine::GetStateName(before),
+                     DeviceStateMachine::GetStateName(app.GetDeviceState()));
+    httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n > 0 ? n : 0);
 }
 

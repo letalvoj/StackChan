@@ -86,6 +86,10 @@ private:
     // deliberately independent of it: it never touches client_fd_, so polling it cannot
     // evict whichever client currently owns the session.
     static esp_err_t DebugHandler(httpd_req_t* req);
+
+    // POST /debug/reset -- drop the client and force the state machine back to idle,
+    // for when the device is unreachable by hand. Does not reboot; the log is evidence.
+    static esp_err_t DebugResetHandler(httpd_req_t* req);
     static void OnClientClosed(httpd_handle_t hd, int sockfd);
     static void SendHelloWork(void* arg);
 
