@@ -228,6 +228,10 @@ class Device:
         # realtime, so anything sent eagerly piles into its queue and gets dropped.
         self.tx = asyncio.Queue()
         self._turn_ending = False
+        # Set by the downlink from session_resumption_update, read when reconnecting.
+        # Carried across device reconnects too -- a pulled cable does not end the
+        # conversation, it only interrupts the transport.
+        self.resumption_handle = None
 
     async def connect(self):
         # ping_interval/ping_timeout are the half-open detector. When an SSH tunnel dies
@@ -462,6 +466,22 @@ async def converse(device: Device, session):
                     await device.enqueue_audio(response.data)
                     continue
 
+                # The server hands out a resumption handle periodically and refreshes it
+                # as the conversation grows. Keeping the newest one is what lets a
+                # reconnect continue the same conversation instead of starting a blank
+                # one -- which is exactly what you notice after a cable pull.
+                if response.session_resumption_update:
+                    upd = response.session_resumption_update
+                    if upd.resumable and upd.new_handle:
+                        device.resumption_handle = upd.new_handle
+
+                # go_away is the server warning us it is about to close (they cap session
+                # length). Treat it as a normal reconnect rather than an error: we already
+                # hold a resumption handle, so the user should not notice.
+                if response.go_away is not None:
+                    print(f"↻ server go_away ({response.go_away.time_left}); "
+                          f"will resume", flush=True)
+
                 server = response.server_content
                 if server and server.interrupted:
                     # Barge-in: drop what has not gone out yet and close the turn.
@@ -522,12 +542,17 @@ async def supervise(url, client, config, args):
     """
     backoff = 0.5
     first = True
+    # Outlives every Device instance on purpose. A pulled cable destroys the transport,
+    # not the conversation -- carrying the handle across reconnects is what turns
+    # "the old convo died, a fresh one started" into simply picking up where we left off.
+    handle = None
     while True:
         device = None
         try:
             if first:
                 print(f"connecting to {url} …", flush=True)
             device = await Device(url).connect()
+            device.resumption_handle = handle
             backoff = 0.5                      # a good connection clears the penalty
             first = False
             print("connected. Tap StackChan's face to start talking. Ctrl-C to quit.",
@@ -544,6 +569,8 @@ async def supervise(url, client, config, args):
             print(f"✗ device unreachable: {type(exc).__name__}: {exc}", flush=True)
         finally:
             if device is not None:
+                # Rescue the handle before the Device goes away with it.
+                handle = device.resumption_handle or handle
                 await device.close()
 
         delay = backoff * (1.0 + random.random() * 0.3)
@@ -565,10 +592,14 @@ async def run_link(device, client, config, args):
             while True:
                 await device.listening.wait()
                 try:
+                    attempt = config.model_copy(update={
+                        "session_resumption": types.SessionResumptionConfig(
+                            handle=device.resumption_handle)})
+                    resumed = device.resumption_handle is not None
                     async with client.aio.live.connect(model=args.model,
-                                                       config=config) as session:
-                        print(f"▶ Gemini Live session open ({args.model}, "
-                              f"voice {args.voice})", flush=True)
+                                                       config=attempt) as session:
+                        print(f"▶ Gemini Live session {'resumed' if resumed else 'open'}"
+                              f" ({args.model}, voice {args.voice})", flush=True)
                         await converse(device, session)
                 except asyncio.CancelledError:
                     raise
