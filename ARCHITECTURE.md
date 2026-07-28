@@ -210,11 +210,33 @@ stable adapter across replugs rather than a new one each time.
 ### 5.4 Status
 
 Builds clean under both USB variants, verified by link map: under NCM the SLIP protocol is
-entirely absent, under SLIP it is present. **Not yet exercised against real hardware.**
+entirely absent, under SLIP it is present.
 
-The Opus/PCM mismatch is unchanged by this work and still blocks audio: the device sends
-Opus, `wasm/gateway/backends/*` unpack raw PCM16, and nothing negotiates `format`. Note
-that under NCM the relevant server is `serve.py` (WebSocket), not the serial gateway.
+**Verified on real hardware.** NCM enumerates (`en9`), DHCP leases `192.168.7.2`, the
+device listens on `192.168.7.1:8081`, and both directions carry traffic: host→device audio
+plays through the speaker, and device→host delivers the hello, MCP results, and protocol
+events. `firmware/examples/jingle.py` is the worked end-to-end demo.
+
+Audio is no longer blocked — `wasm/audio_codec.py` negotiates `format` from the hello and
+transcodes Opus↔PCM at the socket edge.
+
+Two behaviours worth knowing before writing a client:
+
+**One client at a time, enforced.** Adopting a new socket closes the previous one. See
+`AGENT.md` §6 for the full reasoning; the short version is that device-originated frames
+(audio, TTS state) have no requester to route back to, so a second client would silently
+steal a live audio stream. Fan-out belongs in a host-side client, not in firmware.
+
+**The device expects a conversation, not a command stream.** After `tts stop` it does not
+return to `idle` — it transitions `speaking → listening` and emits
+`{"type":"listen","state":"start","mode":"auto"}`, opening the user's turn. A client that
+never closes that turn leaves the device parked in `listening`, where the idle servo
+animation does not run. This is correct agent behaviour, not a bug, and it is the half of
+the loop a conversational client must implement.
+
+Note also that mic audio only flows once the app calls `OpenAudioChannel()` (wake word or
+button). A client that wants to *hear* the device must account for that; playback into the
+device works without it.
 
 ### 5.5 If you ever need byte-level framing again
 

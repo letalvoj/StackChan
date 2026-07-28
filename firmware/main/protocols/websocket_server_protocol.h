@@ -50,8 +50,16 @@ private:
     httpd_handle_t server_ = nullptr;
     EventGroupHandle_t event_group_ = nullptr;
 
-    // Exactly one host at a time. A second connection replaces the first rather than
-    // being queued: two controllers driving one robot is never what anyone wanted.
+    // Exactly one host at a time, enforced: adopting a new socket actively closes the
+    // previous one (see WsHandler for the full reasoning). Note that this is a policy we
+    // impose, not a limit httpd imposes -- esp_http_server holds max_open_sockets
+    // connections happily and delivers RX from all of them. The reason to refuse is
+    // device-originated output: audio and state frames have no requester to route back
+    // to, so a single fd would silently redirect a live audio stream to whichever client
+    // spoke most recently.
+    //
+    // Fan-out belongs in a host-side client, not here; that keeps "who may drive the
+    // robot" out of firmware that costs a reflash to change. Run one client at a time.
     std::atomic<int> client_fd_{-1};
     std::atomic<bool> audio_channel_opened_{false};
 

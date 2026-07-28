@@ -160,56 +160,97 @@ esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
-    // Adopt the socket on EVERY invocation, not just the handshake. The HTTP_GET branch
-    // below turned out never to run on this IDF version, so client_fd_ stayed -1, every
-    // SendFrame() bailed at its first check, and the device could receive but never
-    // reply -- no hello, no MCP results. Capturing it here makes the send path depend on
-    // having seen any frame at all rather than on handshake-dispatch semantics.
+    // ---- Adopting the client socket -------------------------------------------------
+    //
+    // Adopt on EVERY invocation, not just the handshake. The obvious place for this is an
+    // `if (req->method == HTTP_GET)` branch -- that is where esp_http_server is documented
+    // to hand you the completed WebSocket upgrade -- but on this IDF version that branch
+    // never runs for our URI. Doing it there meant client_fd_ stayed -1 forever, every
+    // SendFrame() bailed at its first check, and the device could receive perfectly while
+    // being structurally unable to reply: no hello, no MCP results, no audio. Every
+    // "the device ignores me" symptom traced back to this one line.
+    //
+    // Keying off "we have seen a frame on this socket" instead of "we saw the handshake"
+    // makes the send path independent of handshake-dispatch semantics, which have already
+    // proven to vary between IDF releases.
     int active_fd = httpd_req_to_sockfd(req);
-    if (active_fd >= 0 && self->client_fd_.exchange(active_fd) != active_fd) {
+    int previous_fd = (active_fd >= 0) ? self->client_fd_.exchange(active_fd) : -1;
+    if (active_fd >= 0 && previous_fd != active_fd) {
+        // ---- Why exactly one client, enforced rather than assumed --------------------
+        //
+        // esp_http_server happily holds max_open_sockets connections at once, and RX is
+        // per-socket, so several hosts CAN talk to us simultaneously. We deliberately do
+        // not allow it, and it is worth being precise about why -- because an earlier
+        // version of this code left it to chance and appeared to work.
+        //
+        // The load-bearing problem is not request/response traffic. MCP replies happen to
+        // land on the right socket under turn-taking load, simply because the requester is
+        // whoever most recently touched this handler. The problem is device-ORIGINATED
+        // output: audio frames, TTS state, emotion changes. Those have no requester to
+        // reply to, so with a single fd they follow whoever spoke last -- an assistant
+        // streaming Opus would have its frames silently redirected mid-utterance the
+        // instant some other tool polled get_device_status. That is a data race dressed
+        // up as a routing rule, and it fails in the least debuggable way possible.
+        //
+        // Real fan-out (broadcast to httpd_get_client_list(), replies routed per request)
+        // is maybe two hours of work, but it does not belong here. Deciding WHO may drive
+        // the servos and WHO hears the audio is policy, and policy baked into firmware
+        // costs a reflash to change. Constrained devices conventionally stay single-homed
+        // for exactly this reason -- MQTT is the canonical shape, and upstream xiaozhi is
+        // already built that way, holding one connection to one endpoint.
+        //
+        // So: the newest connection wins and the previous one is actively CLOSED. Being
+        // hung up on is a clean, observable failure that any client library reports.
+        // Leaving the old socket open but deaf -- what the accidental version did -- is
+        // the same outcome with none of the feedback.
+        if (previous_fd >= 0) {
+            // Evict before greeting the newcomer, so the logs read in the order things
+            // actually happened. client_fd_ already points at active_fd, so the close_fn
+            // this triggers takes OnClientClosed's "not the current client" early return
+            // and cannot tear down the session we are in the middle of establishing.
+            ESP_LOGW(TAG, "evicting host on fd=%d in favour of fd=%d (single client by design)",
+                     previous_fd, active_fd);
+            esp_err_t closed = httpd_sess_trigger_close(self->server_, previous_fd);
+            if (closed != ESP_OK) {
+                // Not fatal: the old socket stays open but stops receiving device output,
+                // which is the pre-eviction behaviour. Worth logging loudly because it is
+                // the difference between a client seeing a clean hangup and a silent one.
+                ESP_LOGW(TAG, "could not close fd=%d: %s", previous_fd, esp_err_to_name(closed));
+            }
+        }
         ESP_LOGI(TAG, "adopted host socket fd=%d", active_fd);
-        // Greet from here too, for the same reason: the handshake branch never runs, so
-        // arming the timer there meant the hello was never sent either. Deferred rather
-        // than sent inline because httpd still owns the session inside the handler.
+
+        // A newly adopted socket is a new session: drop any audio channel state belonging
+        // to the previous one, or a half-open channel leaks across clients.
         self->audio_channel_opened_ = false;
         xEventGroupClearBits(self->event_group_, WS_SERVER_SERVER_HELLO_EVENT);
+
+        // Greet immediately, so a tool that attaches learns who we are without waiting for
+        // someone to press talk.
+        //
+        // Deferred by a one-shot timer rather than sent inline: httpd still owns this
+        // session inside the handler, so httpd_ws_send_frame_async() fails here, and
+        // SendFrame's error path would then drop the very client we just accepted.
+        // A timer rather than httpd_queue_work() because queue_work routes through httpd's
+        // control socket on the loopback netif -- a dependency this path does not need,
+        // and one that can be starved by the server's own socket budget. The esp_timer
+        // task is always there.
         self->pending_hello_fd_ = active_fd;
         esp_timer_stop(self->hello_timer_);
-        esp_timer_start_once(self->hello_timer_, 20 * 1000);
+        esp_timer_start_once(self->hello_timer_, 20 * 1000);   // 20 ms
         if (self->on_connected_) {
             self->on_connected_();
         }
     }
 
     if (req->method == HTTP_GET) {
-        // The WebSocket handshake just completed; no payload yet.
-        int fd = httpd_req_to_sockfd(req);
-        self->audio_channel_opened_ = false;
-        int previous = self->client_fd_.exchange(fd);
-        if (previous >= 0 && previous != fd) {
-            ESP_LOGW(TAG, "replacing host on fd=%d with fd=%d", previous, fd);
-        }
-        ESP_LOGI(TAG, "host connected (fd=%d)", fd);
-        if (self->on_connected_) {
-            self->on_connected_();
-        }
-
-        // Greet as soon as the host connects, so a tool that attaches has something to
-        // identify without waiting for someone to press talk.
+        // The WebSocket upgrade itself: no payload to read, so returning here is required
+        // -- falling through would call httpd_ws_recv_frame() on a handshake request.
         //
-        // Queued, NOT sent inline: httpd still owns this session inside the handshake
-        // handler, so httpd_ws_send_frame_async() fails here -- and SendFrame's error
-        // path would then drop the very client we just accepted. httpd_queue_work runs
-        // it on the server task once the handler has returned.
-        xEventGroupClearBits(self->event_group_, WS_SERVER_SERVER_HELLO_EVENT);
-
-        // Deferred by a one-shot timer rather than httpd_queue_work(). Both avoid
-        // sending inline (httpd still owns the session here, so the async send fails),
-        // but queue_work routes through httpd's control socket on the loopback netif,
-        // which adds a dependency this path does not need. The esp_timer task is always
-        // there and cannot be starved by the server's own socket budget.
-        self->pending_hello_fd_ = fd;
-        esp_timer_start_once(self->hello_timer_, 20 * 1000);   // 20 ms
+        // On this IDF version this branch is never reached (see above); it is kept because
+        // it is the documented contract, and a future IDF that does dispatch the handshake
+        // here must not land in the receive path. The socket has already been adopted
+        // above either way, so nothing session-related lives in here anymore.
         return ESP_OK;
     }
 
