@@ -20,6 +20,8 @@
 
 #include <tinyusb.h>
 #include <tinyusb_net.h>
+#include <tusb_cdc_acm.h>
+#include <tusb_console.h>
 
 #define TAG "UsbNetBoard"
 
