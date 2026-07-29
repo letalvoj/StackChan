@@ -169,6 +169,29 @@ TOOLS = [
             ),
         ),
         types.FunctionDeclaration(
+            name="set_face",
+            description=(
+                "Change your facial expression for a few seconds, then it returns to "
+                "neutral on its own. Use it as punctuation while you speak -- happy when "
+                "something pleases you, laughing at a joke, sleepy late in the day, sad "
+                "or crying when commiserating, angry only in jest. Do not narrate it and "
+                "do not use it on every turn; a face that is always doing something reads "
+                "as a screensaver. One well-timed expression beats five."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "emotion": types.Schema(
+                        type=types.Type.STRING,
+                        description="neutral, happy, laughing, angry, sad, crying, sleepy"),
+                    "seconds": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="how long to hold it, 2-10, default 4"),
+                },
+                required=["emotion"],
+            ),
+        ),
+        types.FunctionDeclaration(
             name="get_head_angles",
             description="Where your head is pointing right now, in degrees.",
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
@@ -276,6 +299,8 @@ class Device:
         # A JPEG waiting to be sent as its own turn, once the tool call that produced
         # it has been answered. See handle_tool_call.
         self.pending_photo = None
+        # Pending revert-to-neutral for set_face; a new expression cancels it.
+        self._face_timer = None
         # Set by the downlink from session_resumption_update, read when reconnecting.
         # Carried across device reconnects too -- a pulled cable does not end the
         # conversation, it only interrupts the transport.
@@ -375,6 +400,43 @@ class Device:
     def _src_bytes_per_frame(self) -> int:
         """Source-rate (24 kHz) bytes that map to exactly one device frame."""
         return int(GEMINI_RECEIVE_RATE * self.codec.frame_ms / 1000) * 2
+
+    # The seven the avatar actually implements (avatar_controller.cc). Anything else is
+    # silently ignored by the device, which would look like the tool doing nothing.
+    FACES = ("neutral", "happy", "laughing", "angry", "sad", "crying", "sleepy")
+
+    async def set_face(self, emotion: str, seconds: int = 4):
+        """Hold an expression, then let it lapse back to neutral.
+
+        Time-limited on purpose. An expression that sticks stops being an expression and
+        becomes the face -- the robot ends up permanently furious because something was
+        mildly annoying six minutes ago. Reverting also means the model never has to
+        remember to undo anything, which is exactly the kind of bookkeeping it forgets.
+        """
+        emotion = emotion if emotion in self.FACES else "neutral"
+        seconds = max(2, min(10, int(seconds)))
+
+        await self.ws.send(json.dumps({
+            "session_id": self.session_id, "type": "llm",
+            "emotion": emotion, "text": ""}))
+
+        # A later expression supersedes an earlier one rather than queueing behind it.
+        if self._face_timer is not None:
+            self._face_timer.cancel()
+        if emotion == "neutral":
+            self._face_timer = None
+            return
+
+        async def revert():
+            try:
+                await asyncio.sleep(seconds)
+                await self.ws.send(json.dumps({
+                    "session_id": self.session_id, "type": "llm",
+                    "emotion": "neutral", "text": ""}))
+            except (asyncio.CancelledError, Exception):
+                pass          # superseded, or the link went away; neither is worth noise
+
+        self._face_timer = asyncio.create_task(revert())
 
     async def enqueue_audio(self, pcm24: bytes):
         """Resample + encode OFF the event loop, then queue for paced sending.
@@ -529,9 +591,19 @@ def extract_jpeg(reply: dict) -> bytes | None:
 async def handle_tool_call(device: Device, call, session) -> types.FunctionResponse:
     args = dict(call.args or {})
     mcp_name = MCP_NAMES.get(call.name)
-    if mcp_name is None:
+    if mcp_name is None and call.name != "set_face":
         return types.FunctionResponse(id=call.id, name=call.name,
                                       response={"error": f"unknown tool {call.name}"})
+
+    if call.name == "set_face":
+        # Handled entirely in the client: the device takes emotions over the protocol
+        # ({"type":"llm","emotion":...}), so this needs no MCP tool and no firmware change.
+        emotion = str(args.get("emotion", "neutral"))
+        seconds = int(args.get("seconds", 4) or 4)
+        await device.set_face(emotion, seconds)
+        print(f"  🙂 {emotion} for {max(2, min(10, seconds))}s", flush=True)
+        return types.FunctionResponse(id=call.id, name=call.name,
+                                      response={"result": f"showing {emotion}"})
 
     if call.name == "take_photo":
         # Capture + JPEG encode on device takes a beat; the default timeout is too tight.
