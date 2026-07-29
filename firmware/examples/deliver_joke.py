@@ -46,6 +46,16 @@ from audio_codec import codec_from_hello  # noqa: E402
 SR, FRAME_MS = 16000, 60
 LEAVE_ALONE = -9999
 
+# The beats. Tuned against a live audience of one, which is the only tuning that counts.
+#
+# The first draft was noticeably too slow: an 8s hang reads as the robot having crashed
+# rather than as comic timing, and a 2s gap before the second "hey" loses the impatience
+# that makes the repeat funny. Shorter throughout, and the second call now comes back
+# fast enough to feel like nagging.
+HANG_AFTER_FIRST_CALL = 5.0     # let it sit -- but not long enough to look broken
+GAP_BEFORE_SECOND_CALL = 0.75   # quick, impatient
+BEAT_BEFORE_PUNCHLINE = 2.0     # the turn
+
 # Five jokes. The running gag is that Gemini is the model Opus keeps having to correct,
 # dressed in Icelandic clothes -- volcanoes, sagas, hakarl, the phone book, the language
 # council. Gardar gets to be the one who already knew.
@@ -164,15 +174,19 @@ class Comedian:
         print("   😂 cracking up", flush=True)
         # "Good News" is the old macOS singing voice -- it breaks into a wobble that
         # sounds far more like helpless laughter than any straight voice does.
+        #
+        # Trimmed from the first version: the laugh was running longer than the joke,
+        # which inverts the ratio. Corpsing is funny for about two seconds and then it is
+        # just a robot making noise, so this is one short burst and a single aside.
         await self.face("happy")
-        await self.line("ha ha ha ha ha! ha ha!  ha ha ha ha ha!",
+        await self.line("ha ha ha ha!  ha ha ha!",
                         voice="Good News",
                         dance=(2, [(-26, 46, 900), (26, 40, 900),
                                    (-18, 52, 900), (22, 44, 900)]))
-        for emotion in ("laughing", "happy", "funny", "happy"):
+        for emotion in ("laughing", "happy"):
             await self.face(emotion)
-            await asyncio.sleep(0.28)
-        await self.line("oh no.  oh no, that one got me.", voice="Good News",
+            await asyncio.sleep(0.2)
+        await self.line("oh no.  that one got me.", voice="Good News",
                         dance=(4, [(-12, 50, 600), (12, 44, 600)]))
         await self.face("happy")
         await self.head(0, 45, 250)
@@ -185,14 +199,14 @@ async def perform(c: Comedian, joke: dict, name: str):
     await asyncio.sleep(1.2)
 
     await c.line(f"hey!  hey!  {name}!", dance=(6, [(-14, 52, 500), (14, 48, 500)]))
-    await asyncio.sleep(8.0)                      # the long one. let it hang.
+    await asyncio.sleep(HANG_AFTER_FIRST_CALL)
 
     await c.line(f"hey {name}!")
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(GAP_BEFORE_SECOND_CALL)
 
     await c.face("neutral")
     await c.line(joke["setup"], dance=(9, [(-16, 48, 350), (10, 44, 350), (0, 50, 350)]))
-    await asyncio.sleep(4.0)                      # the beat before the turn
+    await asyncio.sleep(BEAT_BEFORE_PUNCHLINE)
 
     await c.face("funny")
     await c.line(joke["punch"], dance=(7, [(14, 42, 550), (-14, 50, 550)]))
