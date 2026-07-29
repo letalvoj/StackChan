@@ -246,6 +246,9 @@ class Device:
         # Leftover source-rate PCM that did not fill a whole device frame. Carried across
         # chunks; see enqueue_audio for why this matters more than anything else here.
         self._pcm_residual = b""
+        # A JPEG waiting to be sent as its own turn, once the tool call that produced
+        # it has been answered. See handle_tool_call.
+        self.pending_photo = None
         # Set by the downlink from session_resumption_update, read when reconnecting.
         # Carried across device reconnects too -- a pulled cable does not end the
         # conversation, it only interrupts the transport.
@@ -440,6 +443,9 @@ class Device:
     def drop_pending_audio(self):
         """Barge-in: discard queued audio that has not been sent yet."""
         self._pcm_residual = b""
+        # A JPEG waiting to be sent as its own turn, once the tool call that produced
+        # it has been answered. See handle_tool_call.
+        self.pending_photo = None
         while not self.tx.empty():
             try:
                 self.tx.get_nowait()
@@ -497,33 +503,31 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
         # is text, and describing an image in text is exactly what we removed the remote
         # VLM to avoid. The model sees the frame itself and answers from it.
 
-        # ---- Ordering: use the CONVERSATION lane, not the realtime one -----------
+        # ---- Hand the frame over AFTER the tool call is resolved -----------------
         #
-        # send_realtime_input() puts the frame on the realtime-media lane, which is
-        # ordered against the audio clock and NOT against conversation turns. A one-shot
-        # photo sent that way lands whenever the stream gets to it -- which turned out to
-        # be after the current turn had already committed. The model answered blind, and
-        # the frame surfaced in the NEXT turn: ask for a photo, get a hallucination; ask
-        # for a second photo, get a description of the first. Pausing before releasing the
-        # tool response did not fix it, because the problem is ordering, not latency.
+        # Three orderings have been tried here; this is the one that is actually
+        # well-defined.
         #
-        # send_client_content() appends to the conversation in order. With
-        # turn_complete=False it does not trigger generation, so the image is sitting in
-        # context by the time the function response releases the turn.
-        print(f"  📷 {len(jpeg)} bytes of JPEG -> Gemini (conversation lane)", flush=True)
-        await session.send_client_content(
-            turns=types.Content(
-                role="user",
-                parts=[types.Part(inline_data=types.Blob(data=jpeg,
-                                                         mime_type="image/jpeg"))],
-            ),
-            turn_complete=False,
-        )
+        #  1. realtime lane -- ordered against the AUDIO CLOCK, not conversation turns, so
+        #     the frame landed after the turn committed and showed up one turn late.
+        #  2. conversation lane with turn_complete=False, sent before the tool response --
+        #     correctly ordered, but it leaves the user turn OPEN, and a function response
+        #     does not close it. The model waits for a turn that never completes and says
+        #     nothing at all. A race traded for a stall.
+        #  3. this: resolve the function call, THEN send the image as a complete user
+        #     turn. The call is answered so the model is unblocked, and the image arrives
+        #     as an ordinary turn that triggers generation with the picture already in
+        #     context. Nothing is racing and nothing is left half-open.
+        #
+        # The send itself happens in downlink(), right after the tool response goes out,
+        # because ordering is the entire point and it cannot be guaranteed from here.
+        device.pending_photo = jpeg
+        print(f"  📷 {len(jpeg)} bytes of JPEG queued behind the tool response", flush=True)
 
         return types.FunctionResponse(
             id=call.id, name=call.name,
-            response={"result": "The photo is the image just added to this conversation. "
-                                "Look at that image and describe what is actually in it."})
+            response={"result": "Photo captured. The image is being sent to you now -- "
+                                "wait for it, then describe what is actually in it."})
 
     if call.name == "set_head_angles":
         args = {"yaw": int(args.get("yaw", LEAVE_ALONE)),
@@ -588,6 +592,25 @@ async def converse(device: Device, session):
                     responses = [await handle_tool_call(device, c, session)
                                  for c in response.tool_call.function_calls]
                     await session.send_tool_response(function_responses=responses)
+
+                    # Now that the call is resolved, deliver the photo as its own
+                    # complete turn. Order matters and is why this is not done inside
+                    # handle_tool_call.
+                    if device.pending_photo is not None:
+                        jpeg, device.pending_photo = device.pending_photo, None
+                        await session.send_client_content(
+                            turns=types.Content(
+                                role="user",
+                                parts=[
+                                    types.Part(inline_data=types.Blob(
+                                        data=jpeg, mime_type="image/jpeg")),
+                                    types.Part(text="This is the photo you just took "
+                                                    "with your camera. Describe what you "
+                                                    "actually see in it."),
+                                ],
+                            ),
+                            turn_complete=True,
+                        )
 
     await asyncio.gather(uplink(), downlink(), device.pace())
 

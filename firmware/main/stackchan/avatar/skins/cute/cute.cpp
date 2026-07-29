@@ -44,6 +44,11 @@ void CuteAvatar::init(lv_obj_t* parent, const lv_font_t* font)
     _frame->setBorderWidth(_frame_border);
     _frame->setBorderColor(primaryColor);
     _frame->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    // CRITICAL: LVGL objects are clickable by default, and this one covers the whole
+    // face. Left clickable it swallows every tap before the panel's onClick() handler
+    // sees it -- which is tap-to-talk, the device's only control. The default skin never
+    // hit this because it had no full-size children.
+    _frame->removeFlag(LV_OBJ_FLAG_CLICKABLE);
     // Cheap approximation of the reference's neon bloom: LVGL can shadow any object, and
     // a coloured shadow with no offset reads as glow. Static, so it is free per frame.
     lv_obj_set_style_shadow_width(_frame->get(), 18, 0);
@@ -66,6 +71,7 @@ void CuteAvatar::init(lv_obj_t* parent, const lv_font_t* font)
         cheek->setBorderWidth(0);
         cheek->setRadius(0);
         cheek->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        cheek->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // see the frame comment above
         cheek->setPadding(0, 0, 0, 0);
 
         for (int i = 0; i < 2; ++i) {
@@ -79,6 +85,7 @@ void CuteAvatar::init(lv_obj_t* parent, const lv_font_t* font)
             lv_obj_set_style_transform_pivot_x(bar, _blush_stroke_len / 2, 0);
             lv_obj_set_style_transform_pivot_y(bar, _blush_stroke_w / 2, 0);
             // Slant inward-up, mirrored per side, like a little pair of speed lines.
+            lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_set_style_transform_rotation(bar, left ? -600 : 600, 0);
         }
         return cheek;

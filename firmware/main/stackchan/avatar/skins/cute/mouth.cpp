@@ -56,6 +56,7 @@ CuteMouth::CuteMouth(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t secon
     _open->setBgColor(primaryColor);
     _open->setRadius(LV_RADIUS_CIRCLE);
     _open->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _open->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // taps belong to the panel
 
     setPosition(_position);
     setWeight(0);

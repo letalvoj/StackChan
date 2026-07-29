@@ -35,6 +35,7 @@ CuteEyes::CuteEyes(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t seconda
     _container->setBorderWidth(0);
     _container->setBgOpa(0);
     _container->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _container->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // taps belong to the panel
     _container->setPadding(0, 0, 0, 0);
     _container->setTransformPivot(_eye_diameter / 2, _eye_diameter / 2);
     _container->setSize(_eye_diameter, _eye_diameter);
@@ -46,6 +47,7 @@ CuteEyes::CuteEyes(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t seconda
     _eye->setBorderWidth(0);
     _eye->setBgColor(primaryColor);
     _eye->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _eye->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // taps belong to the panel
 
     _pupil = std::make_unique<Container>(_container->get());
     _pupil->setRadius(LV_RADIUS_CIRCLE);
@@ -55,6 +57,7 @@ CuteEyes::CuteEyes(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t seconda
     _pupil->setBorderWidth(0);
     _pupil->setBgColor(secondaryColor);
     _pupil->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _pupil->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // taps belong to the panel
 
     // Eyelid last so it covers both disc and pupil when it slides down.
     _eyelid = std::make_unique<Container>(_container->get());
@@ -64,6 +67,7 @@ CuteEyes::CuteEyes(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t seconda
     _eyelid->setBorderWidth(0);
     _eyelid->setBgColor(secondaryColor);
     _eyelid->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _eyelid->removeFlag(LV_OBJ_FLAG_CLICKABLE);   // taps belong to the panel
 
     setSize(0);
     setWeight(100);
