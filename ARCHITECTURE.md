@@ -238,6 +238,31 @@ Note also that mic audio only flows once the app calls `OpenAudioChannel()` (wak
 button). A client that wants to *hear* the device must account for that; playback into the
 device works without it.
 
+### 5.5 The agent link, in one page
+
+`wasm/clients/gemini_live.py` is the reference client. Beyond audio it carries:
+
+- **`"video":true` on the listen message** — set when the session started from the camera
+  button rather than a face tap. Additive, so older clients stay audio-only.
+- **`{"type":"vad","state":...}`** — the device's own voice detection, forwarded so a
+  client can gate expensive work. Camera streaming uses it: a frame per second *only*
+  while someone is speaking, because every frame stays in the model's context for the
+  rest of the session.
+- **`{"type":"sensor","event":...}`** — `head_pet`, `shaken`. Rate-limited on the device
+  and dropped outside a session. The client folds these in with `turn_complete=False`, so
+  they colour what the robot says next rather than interrupting to announce them.
+
+Two lanes exist and they are **not** interchangeable, which cost three attempts to learn:
+
+| | |
+|---|---|
+| `send_realtime_input` | Ordered against the **audio clock**. Right for the mic and for the camera *stream* |
+| `send_client_content` | Ordered against **conversation turns**. Required for a one-shot photo, which must be in context before the turn it belongs to completes |
+
+Sending a one-shot photo on the realtime lane makes the model answer one turn behind;
+sending it with `turn_complete=False` and no following turn makes it wait forever. The
+working shape is: answer the tool call, *then* send the image as its own complete turn.
+
 ### 5.5 If you ever need byte-level framing again
 
 `USB_SLIP` remains selectable. Its format is RFC 1055 SLIP -- `0xC0` delimiter, `0xDB`

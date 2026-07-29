@@ -118,6 +118,11 @@ Each of these presented as something else entirely.
 | Nothing enumerates, no `Speed:` line in system_profiler | Bad USB cable. Try another before debugging anything else |
 | LED colour "wrong" | Firmware owns the LED as state indicator (green listening / blue speaking / off idle). If a model has `set_led_color`, it will fight you |
 | Model says it cannot take photos | It is telling the truth about whatever tool set it was given — check the declarations, not the firmware |
+| Robot ignores taps, screen dead, LED green | Stuck in `listening`. State is driven by protocol messages, so a client can leave it there; the launcher gates the home indicator and status bar on `is_xiaozhi_idle()`, so the whole UI goes with it. `POST /debug/reset` |
+| A new on-screen widget kills taps or gestures | LVGL objects are **clickable by default**. Anything added to `lv_layer_top()` or over the avatar panel swallows input — `lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE)` |
+| Boot hangs at "Logging in…" | LVGL touched from the app task without `DisplayLockGuard`. LVGL is not thread-safe; use an `lv_timer` if the work belongs in LVGL's own context |
+| Streamed camera frames are one step stale | V4L2 returns the **oldest** queued buffer. `CaptureFresh()` discards the queue first; plain `StreamCaptures()` does not |
+| Model describes the previous photo, or answers blind | Ordering, not latency. Realtime media is ordered against the audio clock, not conversation turns — a one-shot image must go via `send_client_content` |
 
 ---
 
@@ -158,6 +163,10 @@ and is also the privacy boundary: nothing leaves the device before it.
 curl -s http://192.168.7.1:8081/debug | python3 -m json.tool
 # unstick without touching the device (drops client, forces idle, does NOT reboot)
 curl -s -X POST http://192.168.7.1:8081/debug/reset
+# the voice agent
+./wasm/.venv/bin/python wasm/clients/gemini_live.py
+# preview the face without flashing (renders the REAL skin natively)
+./tools/facelab/build.sh && ./tools/facelab/grid.sh mine cute
 # ports / mode
 ls /dev/cu.usbmodem*; system_profiler SPUSBDataType | grep -A3 "Espressif\|USB JTAG"
 # is the link up

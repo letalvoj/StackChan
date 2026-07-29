@@ -1,3 +1,65 @@
+# wasm-chan — StackChan, offline and agent-driven
+
+A fork of M5Stack's StackChan firmware. Three differences from upstream:
+
+1. **No cloud.** The Chinese endpoints (`xiaozhi.me`, `api.tenclass.net`) are gone. The
+   device works with no internet at all.
+2. **USB is the network.** It enumerates as a CDC-NCM adapter and *listens* on
+   `192.168.7.1:8081`; the host connects to it. Nothing to discover or configure.
+3. **A live voice agent** — Gemini Live over that link, with the robot's head, face and
+   camera as tools.
+
+Upstream's README follows below.
+
+---
+
+## Quick start
+
+```bash
+# 1. Build and flash. Hold RST ~3s until the LED turns GREEN first (download mode),
+#    then a SHORT press after flashing -- esptool's "hard reset" does nothing here.
+cd firmware && source ../../esp-idf/export.sh && idf.py build
+cd build && python -m esptool --chip esp32s3 -p /dev/cu.usbmodem111101 \
+    -b 460800 --before default_reset --after hard_reset write_flash "@flash_args"
+
+# 2. Is it alive?  (safe to poll at any time, even mid-conversation)
+curl -s http://192.168.7.1:8081/debug | python3 -m json.tool
+
+# 3. Talk to it
+cp .env .env.local && $EDITOR .env.local        # add GEMINI_API_KEY
+./wasm/.venv/bin/python wasm/clients/gemini_live.py
+```
+
+Then **tap its face** for a voice session, or the **camera button** (bottom-right) for
+voice + 1 fps video. One client at a time — the device hangs up on the previous one.
+
+**If anything misbehaves, read [firmware/DEBUGGING.md](firmware/DEBUGGING.md) first.** It
+is the playbook: what each USB PID means, where the logs are, and a symptom-to-cause table
+for the traps that each cost real flash cycles.
+
+## What it can do
+
+Eleven tools: move and read its head, change its face, take a photo, play a sound, set and
+list and cancel reminders, report its own battery/volume/brightness/uptime, and adjust
+volume and brightness. Petting and shaking are reported to the agent, so it can react to
+being touched. Camera streaming is gated on the device's own voice detection, so a quiet
+room costs nothing.
+
+## Map
+
+| | |
+|---|---|
+| [AGENT.md](../AGENT.md) | The constitution — read before changing anything |
+| [firmware/DEBUGGING.md](firmware/DEBUGGING.md) | Hardware playbook: PIDs, flashing, log locations, symptom table |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the WASM sandbox and the USB transport work |
+| [firmware/AVATAR.md](firmware/AVATAR.md) | How the face is drawn, and how to replace it |
+| [TESTING.md](TESTING.md) | Test layout and the QA harness |
+| [tools/facelab/](tools/facelab/) | Render the real avatar natively — iterate on the face without flashing |
+| `wasm/clients/gemini_live.py` | The voice agent |
+| `firmware/examples/` | `jingle.py`, `say.py`, `deliver_joke.py` — worked examples of driving the device |
+
+---
+
 # StackChan Open-Source
 
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
