@@ -67,6 +67,23 @@ public:
     // bytes crossing USB scale with it.
     std::string CaptureToJpeg(int quality = 80);
 
+    /**
+     * @brief Grab a frame that is actually current, for streaming.
+     *
+     * StreamCaptures() returns whatever is sitting in the driver's queue, and V4L2 hands
+     * back the OLDEST buffer. When frames are pulled on demand at 1 fps that buffer was
+     * filled moments after the previous requeue -- so it is nearly a second old, and a
+     * model answering from it describes what the user was showing a question ago.
+     *
+     * The fix is to discard everything already queued and take the next frame the sensor
+     * produces. The discard count is the queue depth, so it stays correct if the driver
+     * is ever configured with more buffers -- unlike hardcoding "twice", which happens to
+     * be right only for the single-buffer case.
+     *
+     * Costs one sensor frame interval (~50 ms at 20 fps) on top of a normal grab.
+     */
+    bool CaptureFresh();
+
     const uint8_t* GetFrameData()
     {
         return frame_.data;

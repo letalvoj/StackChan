@@ -419,6 +419,36 @@ void StackChanAvatarDisplay::CreatePrivacyIndicators()
     lv_obj_set_style_text_color(cam_icon_, lv_color_hex(kCamColor), 0);
     lv_obj_align(cam_icon_, LV_ALIGN_TOP_RIGHT, -30, 4);
     lv_obj_add_flag(cam_icon_, LV_OBJ_FLAG_HIDDEN);
+
+    // Capture blink.
+    //
+    // An LVGL timer, not the 1 Hz application tick: this runs in LVGL's own context so
+    // it needs no external lock (the bug that froze boot came from touching widgets from
+    // the app task without one), and 1 Hz cannot render a blink against a 1 fps capture
+    // -- it would alias into either a solid light or nothing at all.
+    //
+    // Shows red for kBlinkMs after each frame is grabbed. With VAD gating, "a session is
+    // open" and "a frame just left" are very different facts, and only this one tells you
+    // the gate actually opened.
+    lv_timer_create(
+        [](lv_timer_t* t) {
+            auto* self = static_cast<StackChanAvatarDisplay*>(lv_timer_get_user_data(t));
+            if (self->cam_icon_ == nullptr) {
+                return;
+            }
+            const bool firing = hal_bridge::ms_since_camera_capture() < kBlinkMs;
+            const uint32_t want = firing ? kCaptureBlinkColor : kCamColor;
+            if (want != self->cam_blink_color_) {
+                self->cam_blink_color_ = want;
+                lv_obj_set_style_text_color(self->cam_icon_, lv_color_hex(want), 0);
+                if (self->camera_icon_ != nullptr && hal_bridge::is_camera_live()) {
+                    // The button in the corner blinks with it, so the control you pressed
+                    // is also the thing that reports back.
+                    lv_obj_set_style_text_color(self->camera_icon_, lv_color_hex(want), 0);
+                }
+            }
+        },
+        kBlinkPollMs, this);
 }
 
 void StackChanAvatarDisplay::UpdatePrivacyIndicators()

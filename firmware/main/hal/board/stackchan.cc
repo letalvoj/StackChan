@@ -13,6 +13,8 @@ using StackChanNetBoard = WifiBoard;
 #include "stackchan_display.h"
 #include "application.h"
 #include "protocols/websocket_server_protocol.h"
+#include "hal/hal.h"       // GetHAL().millis() for the capture-blink timestamp
+#include <atomic>
 #include "config.h"
 #include "power_save_timer.h"
 #include "i2c_device.h"
@@ -710,6 +712,26 @@ bool hal_bridge::is_mic_live()
     // and idle do not capture, and saying otherwise on a privacy indicator would be
     // worse than having no indicator at all.
     return Application::GetInstance().GetDeviceState() == kDeviceStateListening;
+}
+
+// Written from the httpd task (the MCP handler) and read from the LVGL task, so atomic.
+// Deliberately a timestamp rather than a flag: a flag would need someone to clear it,
+// and "how long ago" is exactly what the blink duration is derived from.
+static std::atomic<uint32_t> _last_camera_capture_ms{0};
+
+void hal_bridge::note_camera_capture()
+{
+    _last_camera_capture_ms.store(GetHAL().millis(), std::memory_order_relaxed);
+}
+
+uint32_t hal_bridge::ms_since_camera_capture()
+{
+    const uint32_t then = _last_camera_capture_ms.load(std::memory_order_relaxed);
+    if (then == 0) {
+        return UINT32_MAX;      // nothing captured yet this boot
+    }
+    const uint32_t now = GetHAL().millis();
+    return (now >= then) ? (now - then) : UINT32_MAX;
 }
 
 bool hal_bridge::is_camera_live()

@@ -34,6 +34,14 @@ private:
     static constexpr uint32_t kMicColor        = 0xFF9500;   // orange, the usual "mic live"
     static constexpr uint32_t kCamColor        = 0x2F9BFF;   // blue, the usual "camera live"
 
+    // Per-frame capture blink: red for kBlinkMs whenever a frame is actually grabbed.
+    // Polled faster than it blinks so the flash has clean edges rather than aliasing.
+    static constexpr uint32_t kCaptureBlinkColor = 0xFF3B30;
+    static constexpr uint32_t kBlinkMs           = 220;
+    static constexpr uint32_t kBlinkPollMs       = 60;
+
+    uint32_t cam_blink_color_ = 0;
+
     void CreateCameraButton();
     void CreatePrivacyIndicators();
     void UpdatePrivacyIndicators();

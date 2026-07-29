@@ -198,24 +198,16 @@ void Hal::xiaozhi_mcp_init()
                            // for exactly this: one dequeue, no sound, no preview.
                            bool ok;
                            if (stream) {
-                               // Dequeue TWICE and keep the second.
-                               //
-                               // The driver is configured with a single V4L2 buffer, so
-                               // the cycle is: dequeue, requeue, and the sensor refills it
-                               // within a frame time (~50 ms at 20 fps). A second later the
-                               // next dequeue returns THAT frame -- captured almost a full
-                               // second ago. At 1 fps every streamed frame was therefore
-                               // one step stale, and the model answered about whatever was
-                               // held up before the current question. The foreground
-                               // Capture() flushes three frames for the same reason; it is
-                               // not only about exposure settling.
-                               //
-                               // The first dequeue discards the stale frame and requeues;
-                               // the second blocks the ~50 ms it takes to fill and returns
-                               // something current. Cheap: no JPEG encode happens until
-                               // after this, and the measured capture had ~880 ms of slack
-                               // inside its 1 s budget.
-                               ok = camera->StreamCaptures() && camera->StreamCaptures();
+                               // Fresh, not merely available: V4L2 hands back the oldest
+                               // queued buffer, which at 1 fps is nearly a second old.
+                               // CaptureFresh() owns that concern; see its declaration.
+                               ok = camera->CaptureFresh();
+                               if (ok) {
+                                   // Let the UI blink. Recorded at the moment a frame is
+                                   // genuinely grabbed, so the indicator cannot drift out
+                                   // of agreement with reality.
+                                   hal_bridge::note_camera_capture();
+                               }
                            } else {
                                ok = camera->Capture();
                            }

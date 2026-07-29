@@ -1025,6 +1025,24 @@ bool StackChanCamera::SetVFlip(bool enabled)
  * @note 函数会等待之前的编码线程完成后再开始新的处理
  * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
  */
+bool StackChanCamera::CaptureFresh()
+{
+    // Drain the queue, then take the next frame.
+    //
+    // Every buffer currently queued was filled before this call, so all of them are
+    // stale by construction; the frame worth having is the one the sensor produces after
+    // the queue is empty. Deriving the discard count from the queue depth means this
+    // stays correct if the buffer count changes -- the driver already uses 1 or 2
+    // depending on the sensor interface.
+    const size_t depth = mmap_buffers_.empty() ? 1 : mmap_buffers_.size();
+    for (size_t i = 0; i < depth; ++i) {
+        if (!StreamCaptures()) {
+            return false;
+        }
+    }
+    return StreamCaptures();
+}
+
 std::string StackChanCamera::CaptureToJpeg(int quality)
 {
     if (encoder_thread_.joinable()) {

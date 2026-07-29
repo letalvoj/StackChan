@@ -56,6 +56,13 @@ void toggle_xiaozhi_chat_state_with_video();
 bool is_mic_live();
 bool is_camera_live();
 
+// Called on every frame actually captured for streaming, so the UI can blink. This is
+// the difference between "the camera session is open" and "a frame just left the
+// device" -- with VAD gating, those are very different things and only the second one
+// tells you the gate opened.
+void note_camera_capture();
+uint32_t ms_since_camera_capture();
+
 void disply_lvgl_lock();
 void disply_lvgl_unlock();
 lv_disp_t* display_get_lvgl_display();
