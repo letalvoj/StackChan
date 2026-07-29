@@ -60,7 +60,7 @@ public:
 
         // Hold the new pose briefly so it reads as "looked at something", not as a
         // waypoint on the way somewhere else.
-        _next_at = ctx.now_ms + Random::getInstance().getInt(900, 1600);
+        _next_at = ctx.now_ms + restDuration(1600, 3000);
         return true;
     }
 

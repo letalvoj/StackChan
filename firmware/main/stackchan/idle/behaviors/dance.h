@@ -32,7 +32,11 @@ public:
     }
     int weight() const override
     {
-        return 5;
+        // DISABLED. Too distracting on a desk you are trying to work at -- it is the one
+        // idle behaviour designed to pull your eye, which is exactly wrong next to a
+        // keyboard. Kept registered rather than deleted: the code is good and the only
+        // thing standing between here and dancing again is this number.
+        return 0;
     }
 
     void begin(const Context& ctx) override

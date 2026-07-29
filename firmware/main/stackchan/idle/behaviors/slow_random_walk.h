@@ -58,8 +58,10 @@ public:
         ctx.moveTo(yaw, pitch, Random::getInstance().getInt(speed::kDrift, speed::kGentle));
 
         // Long, uneven pauses. Evenly spaced motion looks mechanical; the robot should
-        // seem to be watching something, not running a timer.
-        _next_at = ctx.now_ms + Random::getInstance().getInt(1800, 4500);
+        // seem to be watching something, not running a timer. restDuration() mixes in an
+        // occasional much longer settle, which is what stops the walk feeling like a
+        // fidget -- most of idling should be stillness.
+        _next_at = ctx.now_ms + restDuration(3000, 7000);
         return true;
     }
 

@@ -51,7 +51,7 @@ public:
                 _active     = nullptr;
                 // Rest between behaviours. Without this the robot is in perpetual motion,
                 // which is both louder and less lifelike than moving in bursts.
-                _idle_until = now_ms + Random::getInstance().getInt(_gap_min_ms, _gap_max_ms);
+                _idle_until = now_ms + restDuration(_gap_min_ms, _gap_max_ms);
             }
             return;
         }
@@ -103,8 +103,8 @@ private:
     int _total_weight     = 0;
     Behavior* _active     = nullptr;   // non-owning; points into _behaviors
     uint32_t _idle_until  = 0;
-    uint32_t _gap_min_ms  = 2500;
-    uint32_t _gap_max_ms  = 6000;
+    uint32_t _gap_min_ms  = 5000;
+    uint32_t _gap_max_ms  = 11000;
 };
 
 }  // namespace stackchan::idle

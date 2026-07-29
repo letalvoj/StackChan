@@ -55,11 +55,15 @@ struct Envelope {
 // desk, so idle motion stays in the quiet end of the range. Anything above ~150 is
 // clearly heard across a room; the dance is allowed to break this because it is rare,
 // brief, and meant to be noticed.
+// Servo noise scales with how fast the horn is driven, and the *long* moves are the
+// worst offenders: they hold that speed for longer, so a fast long sweep is the one
+// thing you actually hear across a room. Hence the ordering below is inverted from the
+// obvious one -- the further the head travels, the gentler it is driven.
 namespace speed {
-constexpr int kDrift    = 45;    // barely audible; the default for looking around
-constexpr int kGentle   = 90;    // deliberate but soft
-constexpr int kPurposed = 140;   // larger repositioning moves
-constexpr int kDance    = 320;   // rhythmic, and yes, audible
+constexpr int kDrift    = 34;    // small steps; barely audible
+constexpr int kGentle   = 68;    // deliberate but soft
+constexpr int kPurposed = 85;    // the long repositioning move -- slowest per degree
+constexpr int kDance    = 320;   // rhythmic and audible (behaviour currently disabled)
 }  // namespace speed
 
 // ------------------------------------------------------------------------- sampling
@@ -84,6 +88,27 @@ inline float gaussian(float mean, float stddev, float min, float max)
         }
     }
     return uitk::clamp(mean, min, max);   // pathological RNG; centre is a safe answer
+}
+
+/**
+ * @brief A pause that feels considered rather than scheduled.
+ *
+ * Uniform sampling over one range is what makes idle motion read as mechanical: every
+ * pause lands in the same narrow band, so the robot fidgets on an audible metronome even
+ * though the numbers are technically random.
+ *
+ * A mixture fixes it. Most pauses are ordinary; roughly one in four is a long settle
+ * where the robot simply holds still and looks at something. The long tail is what sells
+ * "resting" -- and on a desk, the stillness is the point.
+ */
+inline uint32_t restDuration(uint32_t base_min_ms, uint32_t base_max_ms)
+{
+    auto& rng = Random::getInstance();
+    if (rng.getInt(0, 99) < 25) {
+        // Long settle: two to three times the ordinary pause.
+        return rng.getInt(static_cast<int>(base_max_ms * 2), static_cast<int>(base_max_ms * 3));
+    }
+    return rng.getInt(static_cast<int>(base_min_ms), static_cast<int>(base_max_ms));
 }
 
 // -------------------------------------------------------------------------- context
