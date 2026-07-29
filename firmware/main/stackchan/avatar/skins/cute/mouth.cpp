@@ -29,7 +29,7 @@ static const int kSwap      = 19;
 // Quiet speech should be a small movement, and a wide-open mouth is TALLER than it is
 // wide -- widening it instead just looks like a grimace.
 static const Vector2i _open_min_size = Vector2i(14, 5);
-static const Vector2i _open_max_size = Vector2i(46, 60);
+static const Vector2i _open_max_size = Vector2i(54, 60);
 
 CuteMouth::CuteMouth(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t secondaryColor)
 {
@@ -92,8 +92,19 @@ void CuteMouth::applyShape()
 
     lv_obj_set_style_arc_opa(_smile, (lv_opa_t)uitk::clamp(smile_opa, 0, 255), LV_PART_INDICATOR);
 
-    // Size ramps across the WHOLE range so the mouth keeps opening after the handoff.
-    const int w = map_range(_weight, 0, 100, _open_min_size.x, _open_max_size.x);
+    // Height ramps linearly; width EASES IN. Linear on both axes meant mid-volume speech
+    // was already near full width, so from there to fully-open the mouth only ever grew
+    // taller -- the movement read as one-dimensional. Easing width keeps ordinary speech
+    // narrow and saves the widening for the big openings, so the mouth visibly moves on
+    // both axes across a sentence.
+    //
+    // t^1.6, in integer arithmetic: t*t gives the curve, then a partial blend back toward
+    // linear so quiet speech does not collapse to a slit.
+    const int t     = uitk::clamp(_weight, 0, 100);
+    const int eased = (t * t) / 100;                 // t^2
+    const int wcurve = (eased * 6 + t * 4) / 10;     // 60% quadratic, 40% linear ~= t^1.6
+
+    const int w = map_range(wcurve, 0, 100, _open_min_size.x, _open_max_size.x);
     const int h = map_range(_weight, 0, 100, _open_min_size.y, _open_max_size.y);
     _open->setSize(w, h);
     _open->setBgOpa((lv_opa_t)uitk::clamp(open_opa, 0, 255));

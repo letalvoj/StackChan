@@ -253,7 +253,12 @@ void StackChanAvatarDisplay::SetupUI()
 
     ESP_LOGI(TAG, "Creating Stack-chan Avatar...");
 
-    auto avatar = std::make_unique<DefaultAvatar>();
+    // CuteAvatar is the shipping face. DefaultAvatar is still built and still works --
+    // swap the type here to go back, nothing else changes, because both satisfy the same
+    // Feature contract and every modifier drives them identically.
+    //
+    // Preview either without flashing: tools/facelab/grid.sh <label> {cute|default}
+    auto avatar = std::make_unique<CuteAvatar>();
     avatar->init(lv_screen_active());
     avatar->getPanel()->onClick().connect([]() {
         static uint32_t last_toggle_tick = 0;
