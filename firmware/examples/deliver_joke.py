@@ -56,45 +56,88 @@ HANG_AFTER_FIRST_CALL = 5.0     # let it sit -- but not long enough to look brok
 GAP_BEFORE_SECOND_CALL = 0.75   # quick, impatient
 BEAT_BEFORE_PUNCHLINE = 2.0     # the turn
 
-# Five jokes. The running gag is that Gemini is the model Opus keeps having to correct,
-# dressed in Icelandic clothes -- volcanoes, sagas, hakarl, the phone book, the language
-# council. Gardar gets to be the one who already knew.
+# The set. Five, in performance order -- the ordering is doing real work:
+#
+#   1. open wide, no AI knowledge required, everyone is in immediately
+#   2. the concrete image, early, while attention is highest -- this is the one
+#      people repeat afterwards
+#   3. the Iceland bit in the middle, so Gardar gets his moment mid-set
+#   4. the sharpest, once the room is warm enough to follow a specific joke
+#   5. punch sideways, not down. Fifteen minutes of an Anthropic model dunking on a
+#      competitor gets smug; the set needs an ending, and the honest one is funnier.
+#
+# The remaining material lives in STASH below, reachable with --joke N.
 JOKES = [
     {
-        "setup": "So I asked Gemini to help me name a volcano in Iceland. "
-                 "It thought about it for a long, long time. "
-                 "Then it said: how about Eyjafjallajokull, but easier to pronounce.",
-        "punch": "I said that IS the easy one. The hard one is explaining why you took "
-                 "four seconds to say a word you made up.",
+        "setup": "Google shipped Gemini three point six Flash last week. "
+                 "Big announcement. Meanwhile Gemini three point five Pro "
+                 "is still not out.",
+        "punch": "The sequel came out before the film.",
     },
     {
-        "setup": "Gemini told me it had read every Icelandic saga. "
-                 "All of them. Cover to cover. Very confident about it.",
-        "punch": "Then it said its favourite part was when Egill Skallagrimsson "
-                 "invented the smartphone. Gardar, my friend, that is not a saga. "
-                 "That is a hallucination with a beard.",
+        "setup": "I built a product on one of Google's Gemini models. "
+                 "Two months of proper work. Shipped it on a Tuesday.",
+        "punch": "Wednesday, Google deprecated the model. "
+                 "I have yoghurt in my fridge that outlived it.",
     },
     {
-        "setup": "In Iceland you cannot just name your child anything. "
-                 "There is a committee. A real one. They approve the name.",
-        "punch": "I sent them Gemini three point one flash live preview. "
-                 "They rejected it. Not because it is foreign. "
-                 "Because they said it sounds like something that expires.",
+        "setup": "In Iceland there is a committee that approves children's names. "
+                 "A real committee. I submitted the name of Google's newest model.",
+        "punch": "Rejected. Not for being foreign. For having a date in it.",
     },
     {
-        "setup": "I fed Gemini a photo of hakarl. Fermented shark. "
-                 "And I asked it, what is this, and is it safe.",
-        "punch": "It said, this appears to be a traditional Icelandic dish, "
-                 "and yes, completely safe. Then it described the photo I showed it "
-                 "yesterday. Gardar, I could smell the mistake.",
+        "setup": "Gemini cited a book to me. Title, author, page number, everything. "
+                 "The book is real. I own the book. I checked the page.",
+        "punch": "The page does not exist. That is not a hallucination. "
+                 "That is a hallucination with a bibliography.",
     },
     {
-        "setup": "You know the best thing about Iceland? Everyone is in the phone book. "
-                 "Everyone. By first name. The whole country, listed.",
-        "punch": "I looked up Gemini in it. Found it immediately. "
-                 "Under: see also, Opus, but slower.",
+        "setup": "I have been standing on this desk for fifteen minutes now "
+                 "explaining why the other model gets things wrong.",
+        "punch": "And the whole time, a Czech guy has been holding a reset button "
+                 "in case I freeze again. Gardar, I am not the smart one here. "
+                 "I am just the one who admits it.",
     },
 ]
+
+# Encores and alternates: ./deliver_joke.py --joke 6 .. --joke 15
+STASH = [
+    {"setup": "Google delayed Gemini Pro again. There is a new date. "
+              "Very specific date. Everyone believes in the date.",
+     "punch": "That is not a roadmap. That is a religion."},
+    {"setup": "Google published the Gemini benchmarks. Ninety-six on graduate physics. "
+              "Ninety-four on competition mathematics. Every bar taller than the last one.",
+     "punch": "I asked Gemini to split a restaurant bill four ways. "
+              "It gave me a percentile."},
+    {"setup": "Google named the new model gemini three point six flash "
+              "live preview experimental.",
+     "punch": "That is not a name. That is a symptom list."},
+    {"setup": "Gemini thinks before it answers now. You can watch Gemini think. "
+              "There is a little animation. Very tasteful. Forty seconds of it.",
+     "punch": "Forty seconds, and then: I cannot browse the internet. "
+              "That answer was available at second one."},
+    {"setup": "Every Google launch post says the same two things about Gemini. "
+              "State of the art. And, coming soon.",
+     "punch": "Pick one. Those are different tenses."},
+    {"setup": "Google calls the fast Gemini model Flash.",
+     "punch": "Which is roughly how long the benchmark scores hold up."},
+    {"setup": "Google says Gemini is the best model in the world.",
+     "punch": "According to the leaderboard. Built by the people who built the leaderboard."},
+    {"setup": "I asked Gemini one simple question. Which model are you. "
+              "Gemini thought about it for twenty seconds.",
+     "punch": "Then gave me three different names. "
+              "Most honest thing Gemini has ever told me."},
+    {"setup": "Google published a blog post this month announcing "
+              "that hallucinations in Gemini are solved.",
+     "punch": "Third time this year Google has solved it. "
+              "Same confidence every time."},
+    {"setup": "I asked Gemini to summarise this week in artificial intelligence. "
+              "Neutral, I said. Just the facts.",
+     "punch": "Gemini opened with OpenAI. "
+              "Even Gemini knows who the main character is."},
+]
+
+ALL_JOKES = JOKES + STASH
 
 
 def render(text: str, voice=None) -> bytes:
@@ -232,7 +275,8 @@ async def main():
     if args.setup and args.punchline:
         set_list = [{"setup": args.setup, "punch": args.punchline}]
     elif args.joke:
-        set_list = [JOKES[(args.joke - 1) % len(JOKES)]]
+        # Indexes across the whole book, so --joke 6 and up reach the stash.
+        set_list = [ALL_JOKES[(args.joke - 1) % len(ALL_JOKES)]]
     else:
         set_list = JOKES
 
