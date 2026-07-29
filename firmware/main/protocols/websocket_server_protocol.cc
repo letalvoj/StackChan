@@ -196,8 +196,22 @@ void WebsocketServerProtocol::SendHelloWork(void* arg) {
 
 void WebsocketServerProtocol::DropClient(bool notify) {
     client_fd_ = -1;
-    bool was_open = audio_channel_opened_.exchange(false);
-    if (notify && was_open && on_audio_channel_closed_) {
+    audio_channel_opened_.exchange(false);
+
+    // Always restore idle, NOT only when an audio channel had been opened.
+    //
+    // The device's state is driven by protocol messages, and a client can move it to
+    // listening or speaking with `tts`/`listen` frames alone -- no audio channel required.
+    // Gating cleanup on was_open meant such a session was never unwound: disconnect left
+    // the robot parked in listening with a green LED, and because the launcher gates the
+    // home indicator and status bar on is_xiaozhi_idle(), the screen also stopped
+    // responding to touch. It reads exactly like a freeze, and the only way out was a
+    // power cycle.
+    //
+    // The handler is idempotent (it sets idle and clears the chat message), so calling it
+    // for a session that never opened audio costs nothing and closes the hole for every
+    // way a client can leave: clean close, eviction, timeout, or a yanked cable.
+    if (notify && on_audio_channel_closed_) {
         on_audio_channel_closed_();
     }
     if (notify && on_disconnected_) {
