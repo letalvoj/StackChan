@@ -402,11 +402,9 @@ bool StackChanCamera::Capture()
         return false;
     }
 
-    // Play shutter sfx. Suppressed while streaming -- once per photo is a nice touch,
-    // once per second is a fault, and it would also fight the speaker mid-conversation.
-    if (shutter_enabled_) {
-        hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
-    }
+    // Play shutter sfx. This is the FOREGROUND photo path; streaming goes through
+    // StreamCaptures(), which is silent and does not touch the screen.
+    hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
 
     for (int i = 0; i < 3; i++) {
         struct v4l2_buffer buf = {};

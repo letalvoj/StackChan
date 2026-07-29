@@ -183,9 +183,20 @@ void Hal::xiaozhi_mcp_init()
                            // Capture runs at lowered priority upstream; keep that -- the
                            // sensor read is long and must not starve audio.
                            TaskPriorityReset priority_reset(1);
-                           camera->setShutterEnabled(!stream);
-                           const bool ok = camera->Capture();
-                           camera->setShutterEnabled(true);   // restore for the next photo
+
+                           // Two genuinely different paths, not one path with a flag.
+                           //
+                           // Capture() is the FOREGROUND photo: it plays the shutter
+                           // sound, flushes three frames from the sensor to get a settled
+                           // exposure, and ends by pushing the result to the screen as a
+                           // preview. All three are right for "take my picture" and all
+                           // three are wrong once per second during a conversation --
+                           // measured at 698 ms median, 939 ms worst, with a photo
+                           // flashing up on the face each time.
+                           //
+                           // StreamCaptures() is the background path that already existed
+                           // for exactly this: one dequeue, no sound, no preview.
+                           const bool ok = stream ? camera->StreamCaptures() : camera->Capture();
                            if (!ok) {
                                throw std::runtime_error("Failed to capture photo");
                            }
