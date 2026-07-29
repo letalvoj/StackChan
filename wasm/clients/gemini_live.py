@@ -63,6 +63,12 @@ RESUME_WINDOW_S = 90
 # enough to ride out ordinary network jitter, small enough not to feel like lag.
 PREROLL_FRAMES = 4
 
+# Pause between handing Gemini a photo and releasing the tool response that lets it
+# speak. See handle_tool_call: the image and the tool result travel on different lanes,
+# and without this the model answers before it has looked. Long enough to be reliable,
+# short enough that the robot still feels like it glanced rather than pondered.
+PHOTO_INGEST_S = 0.8
+
 
 # --------------------------------------------------------------------------- env
 
@@ -503,9 +509,27 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
         # field name is about the modality lane, not about motion.
         await session.send_realtime_input(
             video=types.Blob(data=jpeg, mime_type="image/jpeg"))
+
+        # ---- Let the frame land BEFORE releasing the turn -------------------------
+        #
+        # These are two different lanes with no ordering guarantee between them. The
+        # image travels on the realtime-media lane and is ingested on its own timeline;
+        # the function response travels on the turn lane and unblocks generation the
+        # instant it arrives. Send them back to back and the model starts answering
+        # before the frame is in context -- so it describes nothing, and the photo shows
+        # up in the NEXT turn instead. That is exactly the "it answers, then a follow-up
+        # question suddenly works" behaviour.
+        #
+        # There is no ack for realtime media to wait on, so this is a deliberate pause
+        # rather than a handshake. It is the honest fix available at this layer: the Live
+        # API is built for continuous streams, where a frame arriving a beat late is
+        # invisible, and a one-shot photo is the case that exposes the seam.
+        await asyncio.sleep(PHOTO_INGEST_S)
+
         return types.FunctionResponse(
             id=call.id, name=call.name,
-            response={"result": "Photo taken and sent to you. Describe what you see."})
+            response={"result": "The photo has been captured and sent to you as an image. "
+                                "Look at it and describe what you actually see."})
 
     if call.name == "set_head_angles":
         args = {"yaw": int(args.get("yaw", LEAVE_ALONE)),
