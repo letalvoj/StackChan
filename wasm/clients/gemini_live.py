@@ -688,7 +688,36 @@ async def converse(device: Device, session):
                             turn_complete=True,
                         )
 
-    await asyncio.gather(uplink(), downlink(), device.pace(), video_uplink())
+    async def watch_mode():
+        """End the session if the device switches between audio-only and video.
+
+        The tool set is decided when the session OPENS, so a session started by a face
+        tap keeps take_photo for its whole life -- including after the camera button is
+        pressed and frames are already streaming. Observed exactly that: the model was
+        receiving live frames and still called take_photo, because the declaration was
+        still on the menu from ten minutes earlier.
+
+        Returning here unwinds converse(), and run_session reopens with the right tools.
+        The resumption handle carries the conversation across, so the swap costs a
+        reconnect and not the context.
+        """
+        opened_with = device.video_session
+        while device.video_session == opened_with:
+            await asyncio.sleep(0.25)
+        print(f"↻ mode changed to {'camera + mic' if device.video_session else 'mic only'};"
+              f" reopening session with matching tools", flush=True)
+
+    # First task to finish ends the session -- watch_mode returning is the signal.
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(t) for t in
+         (uplink(), downlink(), device.pace(), video_uplink(), watch_mode())],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for t in pending:
+        t.cancel()
+    for t in done:
+        if t.exception() is not None:
+            raise t.exception()
 
 
 async def main():
