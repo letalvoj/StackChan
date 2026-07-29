@@ -148,9 +148,13 @@ TOOLS = [
             description=(
                 "Move your head. Use this often and naturally while talking -- tilt "
                 "when curious, look up when thinking, turn toward what you mention. "
-                "Yaw -128..128 (negative is your left), pitch 0..90 (90 is up). "
-                "Stay within +/-45 yaw for normal conversation. Speed 100-1000, "
-                "150 is natural, 700 is excited."
+                "YAW -128..128: NEGATIVE turns toward the LEFT of the person facing "
+                "you, POSITIVE toward their RIGHT. Phrased from the viewer's side on "
+                "purpose: when someone says 'look left' they mean their own left, and "
+                "any wording like 'your left' gets mirrored into the opposite motion. "
+                "Verified on hardware -- yaw -120 physically turns to the viewer's left. "
+                "PITCH 0..90, where 90 is up. Stay within +/-45 yaw for normal "
+                "conversation. Speed 100-1000, 150 is natural, 700 is excited."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,

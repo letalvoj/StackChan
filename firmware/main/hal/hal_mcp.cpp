@@ -47,7 +47,15 @@ void Hal::xiaozhi_mcp_init()
                        "Adjust head position. GUIDELINES: "
                        "1. For natural interaction, stay within +/- 45 degrees. "
                        "2. Only use values > 70 if the user explicitly asks to look far away/behind. "
-                       "3. Max ranges: Yaw(-128 to 128, -128 as your left), Pitch(0 to 90, 90 as your up). "
+                       // "-128 as your left" was wrong AND ambiguous. Wrong because -128
+                       // physically turns toward the viewer's left, which is the robot's
+                       // own RIGHT; ambiguous because "your left" is exactly the phrase a
+                       // model silently reinterprets, so it can move correctly and still
+                       // narrate the opposite. Verified on hardware by commanding both
+                       // extremes and photographing what the camera saw.
+                       "3. Max ranges: Yaw(-128 to 128; NEGATIVE turns toward the LEFT of "
+                       "the person facing you, POSITIVE toward their RIGHT), "
+                       "Pitch(0 to 90, 90 is up). "
                        "Speed(100-1000, 150 is natural).",
                        PropertyList({Property("yaw", kPropertyTypeInteger, -9999, -9999, 128),
                                      Property("pitch", kPropertyTypeInteger, -9999, -9999, 90),
