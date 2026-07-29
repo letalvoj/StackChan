@@ -34,6 +34,7 @@ import json
 import os
 import random
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -47,6 +48,16 @@ from audio_codec import codec_from_hello  # noqa: E402
 
 GEMINI_RECEIVE_RATE = 24000     # Live API always returns 24 kHz PCM16 mono
 GEMINI_SEND_RATE = 16000        # and expects 16 kHz in
+
+# How long a resumption handle stays usable after the link drops.
+#
+# Resumption exists to survive a transport hiccup -- a yanked cable, a dead tunnel, a
+# device reboot -- not to make the robot remember an arbitrary amount of time later.
+# Without a bound, a handle taken this morning would still be replayed this evening and
+# the robot would carry on a conversation from hours ago as though nothing happened,
+# in front of whoever happens to be standing there now. Past this window we drop the
+# handle and the next tap starts a genuinely fresh conversation.
+RESUME_WINDOW_S = 90
 
 
 # --------------------------------------------------------------------------- env
@@ -546,12 +557,18 @@ async def supervise(url, client, config, args):
     # not the conversation -- carrying the handle across reconnects is what turns
     # "the old convo died, a fresh one started" into simply picking up where we left off.
     handle = None
+    handle_at = 0.0          # monotonic time the handle was last rescued
     while True:
         device = None
         try:
             if first:
                 print(f"connecting to {url} …", flush=True)
             device = await Device(url).connect()
+            if handle is not None and time.monotonic() - handle_at > RESUME_WINDOW_S:
+                age = time.monotonic() - handle_at
+                print(f"↻ dropping resumption handle ({age:.0f}s old); starting fresh",
+                      flush=True)
+                handle = None
             device.resumption_handle = handle
             backoff = 0.5                      # a good connection clears the penalty
             first = False
@@ -569,8 +586,11 @@ async def supervise(url, client, config, args):
             print(f"✗ device unreachable: {type(exc).__name__}: {exc}", flush=True)
         finally:
             if device is not None:
-                # Rescue the handle before the Device goes away with it.
-                handle = device.resumption_handle or handle
+                # Rescue the handle before the Device goes away with it, and stamp it so
+                # it can age out rather than living forever.
+                if device.resumption_handle:
+                    handle = device.resumption_handle
+                handle_at = time.monotonic()
                 await device.close()
 
         delay = backoff * (1.0 + random.random() * 0.3)
