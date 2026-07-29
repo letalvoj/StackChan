@@ -277,6 +277,8 @@ void StackChanAvatarDisplay::SetupUI()
         }
     });
 
+    // Created here, inside SetupUI's DisplayLockGuard, so widget creation is serialised
+    // against the render task like everything else in this function.
     CreateCameraButton();
     CreatePrivacyIndicators();
 
@@ -421,6 +423,14 @@ void StackChanAvatarDisplay::CreatePrivacyIndicators()
 
 void StackChanAvatarDisplay::UpdatePrivacyIndicators()
 {
+    // MUST hold the LVGL lock. This runs on the application task once a second while the
+    // LVGL port task is rendering; touching objects without the lock is an unsynchronised
+    // mutation of live widget state, and it hung the device on the very first clock tick
+    // -- boot froze at "Logging in...", the main loop never produced another line, and
+    // the screen stopped responding to touch entirely. Every other method here that
+    // touches widgets takes this guard; this one was written without it.
+    DisplayLockGuard lock(this);
+
     const bool mic = hal_bridge::is_mic_live();
     const bool cam = hal_bridge::is_camera_live();
 
