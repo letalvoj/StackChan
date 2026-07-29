@@ -6,6 +6,7 @@
 #pragma once
 #include "../modifiable.h"
 #include <hal/hal.h>
+#include <hal/board/hal_bridge.h>
 #include <cstdint>
 
 namespace stackchan {
@@ -73,6 +74,10 @@ private:
         if (!_is_reacting) {
             // 首次触发时，记录状态以便恢复
             _is_reacting = true;
+
+            // Same idea as head_pet: the dizzy eyes are the local reaction, this lets a
+            // connected agent notice it was picked up and moved around.
+            hal_bridge::report_sensor_event("shaken");
 
             auto& avatar = stackchan.avatar();
 

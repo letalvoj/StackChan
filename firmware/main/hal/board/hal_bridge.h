@@ -63,6 +63,13 @@ bool is_camera_live();
 void note_camera_capture();
 uint32_t ms_since_camera_capture();
 
+// Report a physical thing that happened TO the robot -- being petted, being shaken.
+// These already drive local reactions (hearts, blush, dizzy eyes); forwarding them lets
+// a connected agent know it was touched, so it can react to it in conversation rather
+// than the reaction being purely cosmetic. Rate-limited and dropped when nobody is
+// listening; this is flavour, not telemetry.
+void report_sensor_event(const char* event);
+
 void disply_lvgl_lock();
 void disply_lvgl_unlock();
 lv_disp_t* display_get_lvgl_display();

@@ -9,6 +9,7 @@
 #include "../utils/random.h"
 #include <smooth_ui_toolkit.hpp>
 #include <hal/hal.h>
+#include <hal/board/hal_bridge.h>
 #include <cstdint>
 #include <memory>
 
@@ -89,6 +90,10 @@ private:
         _heart_decorator_id =
             avatar.addDecorator(std::make_unique<avatar::HeartDecorator>(lv_screen_active(), duration, 500));
         _shy_decorator_id = avatar.addDecorator(std::make_unique<avatar::ShyDecorator>(lv_screen_active(), duration));
+
+        // Let a connected agent know it was touched, so being petted can be something it
+        // reacts to in conversation rather than only something the face draws.
+        hal_bridge::report_sensor_event("head_pet");
 
         // 动作反馈
         perform_pet_motion(stackchan);

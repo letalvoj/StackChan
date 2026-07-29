@@ -301,6 +301,9 @@ class Device:
         self.pending_photo = None
         # Pending revert-to-neutral for set_face; a new expression cancels it.
         self._face_timer = None
+        # Physical events reported by the device (petting, shaking), waiting to be folded
+        # into the model's context. A queue rather than a flag: two pats are two events.
+        self.sensor_events = asyncio.Queue()
         # Set by the downlink from session_resumption_update, read when reconnecting.
         # Carried across device reconnects too -- a pulled cable does not end the
         # conversation, it only interrupts the transport.
@@ -362,6 +365,14 @@ class Device:
                 elif data.get("state") == "stop":
                     self.listening.clear()
                     self.voice_active = False
+            elif kind == "sensor":
+                # Something physical happened TO the robot -- petted, shaken. Queued for
+                # the session task to fold into context; the pump must not block on the
+                # model, and it does not own the Gemini session anyway.
+                ev = data.get("event")
+                if ev:
+                    self.sensor_events.put_nowait(ev)
+                    print(f"  ✋ {ev}", flush=True)
             elif kind == "vad":
                 # Device-side VAD. Camera streaming is gated on this: frames only while
                 # someone is actually speaking.
@@ -665,6 +676,34 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
 async def converse(device: Device, session):
     """Bridge one live session: mic up, audio down, tool calls across."""
 
+    async def sensor_uplink():
+        """Fold physical events into context WITHOUT forcing a reply.
+
+        turn_complete=False is the whole point. Being petted should colour what the robot
+        says next, not interrupt whatever is happening to announce that it was petted -- a
+        robot that says "you touched me!" every single time is a car alarm. The note lands
+        in context, and the model can mention it, or not, when it next speaks naturally.
+
+        Phrased as a third-person stage direction so it reads as something that happened
+        rather than as the user having said it.
+        """
+        NOTE = {
+            "head_pet": "(Someone is petting the robot's head right now.)",
+            "shaken": "(Someone just picked the robot up and shook it around.)",
+        }
+        while True:
+            ev = await device.sensor_events.get()
+            note = NOTE.get(ev)
+            if note is None:
+                continue
+            try:
+                await session.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part(text=note)]),
+                    turn_complete=False,
+                )
+            except Exception as exc:
+                print(f"  ⚠ sensor note dropped: {type(exc).__name__}", flush=True)
+
     async def video_uplink():
         """Camera frames at <= 1 fps, only while the device's VAD hears speech.
 
@@ -786,7 +825,8 @@ async def converse(device: Device, session):
     # First task to finish ends the session -- watch_mode returning is the signal.
     done, pending = await asyncio.wait(
         [asyncio.create_task(t) for t in
-         (uplink(), downlink(), device.pace(), video_uplink(), watch_mode())],
+         (uplink(), downlink(), device.pace(), video_uplink(),
+          sensor_uplink(), watch_mode())],
         return_when=asyncio.FIRST_COMPLETED,
     )
     for t in pending:

@@ -734,6 +734,34 @@ uint32_t hal_bridge::ms_since_camera_capture()
     return (now >= then) ? (now - then) : UINT32_MAX;
 }
 
+void hal_bridge::report_sensor_event(const char* event)
+{
+    if (event == nullptr) {
+        return;
+    }
+    auto& app = Application::GetInstance();
+
+    // Only while a client is actually listening. Outside a session there is nobody to
+    // tell, and queueing these up would mean the robot opening a later conversation with
+    // a report of everything that happened while it was alone.
+    if (app.GetDeviceState() != kDeviceStateListening) {
+        return;
+    }
+
+    // Rate limit. Petting fires repeatedly while a hand rests on the head, and shaking
+    // fires on every jolt; unthrottled this would flood the link and bury the transcript
+    // in the same event twice a second.
+    static std::atomic<uint32_t> last_ms{0};
+    const uint32_t now  = GetHAL().millis();
+    const uint32_t then = last_ms.load(std::memory_order_relaxed);
+    if (then != 0 && now - then < 4000) {
+        return;
+    }
+    last_ms.store(now, std::memory_order_relaxed);
+
+    app.SendSensorEvent(event);
+}
+
 bool hal_bridge::is_camera_live()
 {
     auto& app = Application::GetInstance();
