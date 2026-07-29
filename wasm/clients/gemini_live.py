@@ -59,6 +59,10 @@ GEMINI_SEND_RATE = 16000        # and expects 16 kHz in
 # handle and the next tap starts a genuinely fresh conversation.
 RESUME_WINDOW_S = 90
 
+# Frames of head start before a turn begins playing. 4 x 60 ms = 240 ms of cushion --
+# enough to ride out ordinary network jitter, small enough not to feel like lag.
+PREROLL_FRAMES = 4
+
 
 # --------------------------------------------------------------------------- env
 
@@ -239,6 +243,9 @@ class Device:
         # realtime, so anything sent eagerly piles into its queue and gets dropped.
         self.tx = asyncio.Queue()
         self._turn_ending = False
+        # Leftover source-rate PCM that did not fill a whole device frame. Carried across
+        # chunks; see enqueue_audio for why this matters more than anything else here.
+        self._pcm_residual = b""
         # Set by the downlink from session_resumption_update, read when reconnecting.
         # Carried across device reconnects too -- a pulled cable does not end the
         # conversation, it only interrupts the transport.
@@ -318,16 +325,55 @@ class Device:
         except Exception:
             pass
 
+    def _src_bytes_per_frame(self) -> int:
+        """Source-rate (24 kHz) bytes that map to exactly one device frame."""
+        return int(GEMINI_RECEIVE_RATE * self.codec.frame_ms / 1000) * 2
+
     async def enqueue_audio(self, pcm24: bytes):
         """Resample + encode OFF the event loop, then queue for paced sending.
 
-        Both steps are CPU-bound: the resampler is pure Python (see resample) and Opus
-        encoding is a C call that still blocks. Doing them inline stalls the whole
-        client -- including the microphone uplink, since it shares this event loop.
-        That made the choppiness bidirectional rather than just an output problem.
+        THE IMPORTANT PART IS THE RESIDUAL.
+
+        codec.encode() zero-pads a trailing partial frame, which is right for a complete
+        utterance and catastrophic per chunk: Gemini streams arbitrary-sized chunks, so
+        almost every one ends mid-frame and gets padded with silence. That injects a burst
+        of zeros into the middle of continuous speech several times a second -- which is
+        exactly what "crackle and jitter" sounds like. It is not a scheduling problem and
+        no amount of buffering downstream can repair it, because the damage is already in
+        the samples.
+
+        So we accumulate at the SOURCE rate and only ever hand whole frames onward.
+        Slicing at the source rate rather than after resampling also keeps the resampler
+        phase-continuous: 24k -> 16k is 3:2, so one 60 ms device frame is exactly 1440
+        source samples, and resampling that exact quantity avoids a fractional-phase
+        reset (another, quieter click) at every chunk boundary.
+
+        Both steps are CPU-bound -- pure-Python resampling plus a blocking Opus call -- so
+        they run in a worker thread; inline they stall the event loop the microphone
+        uplink shares, which made the choppiness bidirectional.
         """
+        self._pcm_residual += pcm24
+        step = self._src_bytes_per_frame()
+        n = len(self._pcm_residual) // step
+        if n == 0:
+            return
+        whole, self._pcm_residual = self._pcm_residual[:n * step], self._pcm_residual[n * step:]
+
         def work():
-            pcm = resample(pcm24, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
+            pcm = resample(whole, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
+            return self.codec.encode(pcm)
+
+        for frame in await asyncio.to_thread(work):
+            self.tx.put_nowait(frame)
+
+    async def flush_audio(self):
+        """End of turn: emit the tail, padded. Padding is correct HERE and only here."""
+        if not self._pcm_residual:
+            return
+        tail, self._pcm_residual = self._pcm_residual, b""
+
+        def work():
+            pcm = resample(tail, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
             return self.codec.encode(pcm)
 
         for frame in await asyncio.to_thread(work):
@@ -345,6 +391,17 @@ class Device:
         speaking = False
         deadline = None
         while True:
+            # Pre-roll before the first frame of a turn. The device plays in hard real
+            # time, so if the queue ever runs dry mid-utterance it underruns and clicks.
+            # Gemini delivers in bursts, and starting on the very first frame means the
+            # first network hiccup is audible. kPreroll frames of head start costs that
+            # much latency once per turn and absorbs the jitter for the rest of it.
+            if not speaking and self.tx.qsize() < PREROLL_FRAMES:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._preroll_wait()), timeout=0.4)
+                except asyncio.TimeoutError:
+                    pass          # short utterance: play what we have rather than stall
+
             frame = await self.tx.get()
 
             if frame is None:                     # end-of-turn marker
@@ -372,11 +429,17 @@ class Device:
                 # burst to catch up -- bursting is the very thing that drops frames.
                 deadline = asyncio.get_running_loop().time()
 
+    async def _preroll_wait(self):
+        while self.tx.qsize() < PREROLL_FRAMES:
+            await asyncio.sleep(0.01)
+
     async def end_turn(self):
+        await self.flush_audio()
         await self.tx.put(None)
 
     def drop_pending_audio(self):
         """Barge-in: discard queued audio that has not been sent yet."""
+        self._pcm_residual = b""
         while not self.tx.empty():
             try:
                 self.tx.get_nowait()
