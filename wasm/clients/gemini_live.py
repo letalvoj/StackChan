@@ -63,12 +63,6 @@ RESUME_WINDOW_S = 90
 # enough to ride out ordinary network jitter, small enough not to feel like lag.
 PREROLL_FRAMES = 4
 
-# Pause between handing Gemini a photo and releasing the tool response that lets it
-# speak. See handle_tool_call: the image and the tool result travel on different lanes,
-# and without this the model answers before it has looked. Long enough to be reliable,
-# short enough that the robot still feels like it glanced rather than pondered.
-PHOTO_INGEST_S = 0.8
-
 
 # --------------------------------------------------------------------------- env
 
@@ -499,37 +493,37 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
         if not jpeg:
             return types.FunctionResponse(id=call.id, name=call.name,
                                           response={"error": "camera returned no image"})
-        # The pixels go in as realtime media, NOT as the function response -- a tool
-        # result is text, and describing an image in text is exactly what we removed the
-        # remote VLM to avoid. The model sees the frame itself and answers from it.
-        print(f"  📷 {len(jpeg)} bytes of JPEG -> Gemini", flush=True)
-        # `video=`, not `media=`. media= serialises to realtime_input.media_chunks, which
-        # the Live API now rejects outright with a 1007 close -- killing the whole
-        # session, not just the photo. A single still frame counts as video here; the
-        # field name is about the modality lane, not about motion.
-        await session.send_realtime_input(
-            video=types.Blob(data=jpeg, mime_type="image/jpeg"))
+        # The pixels go in as an image part, NOT as the function response -- a tool result
+        # is text, and describing an image in text is exactly what we removed the remote
+        # VLM to avoid. The model sees the frame itself and answers from it.
 
-        # ---- Let the frame land BEFORE releasing the turn -------------------------
+        # ---- Ordering: use the CONVERSATION lane, not the realtime one -----------
         #
-        # These are two different lanes with no ordering guarantee between them. The
-        # image travels on the realtime-media lane and is ingested on its own timeline;
-        # the function response travels on the turn lane and unblocks generation the
-        # instant it arrives. Send them back to back and the model starts answering
-        # before the frame is in context -- so it describes nothing, and the photo shows
-        # up in the NEXT turn instead. That is exactly the "it answers, then a follow-up
-        # question suddenly works" behaviour.
+        # send_realtime_input() puts the frame on the realtime-media lane, which is
+        # ordered against the audio clock and NOT against conversation turns. A one-shot
+        # photo sent that way lands whenever the stream gets to it -- which turned out to
+        # be after the current turn had already committed. The model answered blind, and
+        # the frame surfaced in the NEXT turn: ask for a photo, get a hallucination; ask
+        # for a second photo, get a description of the first. Pausing before releasing the
+        # tool response did not fix it, because the problem is ordering, not latency.
         #
-        # There is no ack for realtime media to wait on, so this is a deliberate pause
-        # rather than a handshake. It is the honest fix available at this layer: the Live
-        # API is built for continuous streams, where a frame arriving a beat late is
-        # invisible, and a one-shot photo is the case that exposes the seam.
-        await asyncio.sleep(PHOTO_INGEST_S)
+        # send_client_content() appends to the conversation in order. With
+        # turn_complete=False it does not trigger generation, so the image is sitting in
+        # context by the time the function response releases the turn.
+        print(f"  📷 {len(jpeg)} bytes of JPEG -> Gemini (conversation lane)", flush=True)
+        await session.send_client_content(
+            turns=types.Content(
+                role="user",
+                parts=[types.Part(inline_data=types.Blob(data=jpeg,
+                                                         mime_type="image/jpeg"))],
+            ),
+            turn_complete=False,
+        )
 
         return types.FunctionResponse(
             id=call.id, name=call.name,
-            response={"result": "The photo has been captured and sent to you as an image. "
-                                "Look at it and describe what you actually see."})
+            response={"result": "The photo is the image just added to this conversation. "
+                                "Look at that image and describe what is actually in it."})
 
     if call.name == "set_head_angles":
         args = {"yaw": int(args.get("yaw", LEAVE_ALONE)),
