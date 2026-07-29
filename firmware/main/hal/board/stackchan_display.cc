@@ -13,6 +13,7 @@
 #include <src/misc/cache/lv_cache.h>
 #include <settings.h>
 #include "hal_bridge.h"
+#include "font_awesome.h"
 #include <cstdio>
 #include <lvgl.h>
 #include <lvgl_theme.h>
@@ -28,6 +29,9 @@ using namespace stackchan::avatar;
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
 LV_FONT_DECLARE(font_awesome_30_4);
+// 20px variant for the camera button and the privacy indicators -- the 30px one is for
+// the emotion display and is far too heavy for a corner glyph.
+LV_FONT_DECLARE(font_awesome_20_4);
 
 // Have to register themes, so the asset apply can update the text font
 void StackChanAvatarDisplay::InitializeLcdThemes()
@@ -273,6 +277,9 @@ void StackChanAvatarDisplay::SetupUI()
         }
     });
 
+    CreateCameraButton();
+    CreatePrivacyIndicators();
+
     stackchan.attachAvatar(std::move(avatar));
     stackchan.addModifier(std::make_unique<BreathModifier>());
     controller_.SetBlinkModifierId(stackchan.addModifier(std::make_unique<BlinkModifier>()));
@@ -351,8 +358,91 @@ void StackChanAvatarDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image)
     ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, 6000 * 1000));
 }
 
+void StackChanAvatarDisplay::CreateCameraButton()
+{
+    // Bottom-right, deliberately understated: a camera that is easy to hit by accident is
+    // a privacy problem, and one that shouts is ugly on a face. Subtle grey glyph, but the
+    // touch target is much larger than the glyph -- a small icon does not have to mean a
+    // small button, and on a 320x240 panel with fingers it must not.
+    camera_btn_ = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(camera_btn_);
+    lv_obj_set_size(camera_btn_, kCameraBtnTouch, kCameraBtnTouch);
+    lv_obj_align(camera_btn_, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
+    lv_obj_set_style_radius(camera_btn_, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(camera_btn_, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(camera_btn_, LV_OBJ_FLAG_CLICKABLE);
+
+    camera_icon_ = lv_label_create(camera_btn_);
+    lv_label_set_text(camera_icon_, FONT_AWESOME_CAMERA);
+    lv_obj_set_style_text_font(camera_icon_, &font_awesome_20_4, 0);
+    lv_obj_set_style_text_color(camera_icon_, lv_color_hex(kCameraIdleColor), 0);
+    lv_obj_center(camera_icon_);
+
+    lv_obj_add_event_cb(
+        camera_btn_,
+        [](lv_event_t* e) {
+            static uint32_t last_tick = 0;
+            const uint32_t now        = GetHAL().millis();
+            // Same debounce as the face: capture takes a moment to spin up and a double
+            // tap would toggle straight back off.
+            if (last_tick != 0 && now - last_tick < 2000) {
+                return;
+            }
+            if (hal_bridge::is_xiaozhi_ready()) {
+                last_tick = now;
+                hal_bridge::toggle_xiaozhi_chat_state_with_video();
+            }
+        },
+        LV_EVENT_CLICKED, nullptr);
+}
+
+void StackChanAvatarDisplay::CreatePrivacyIndicators()
+{
+    // Where the status bar sits, but always visible -- the status bar auto-hides, and an
+    // indicator that tells you a microphone is live only when you swipe for it is not an
+    // indicator. Tiny on purpose: present, not shouting.
+    //
+    // Colours follow the platform convention people already read without thinking:
+    // orange = microphone, blue = camera.
+    mic_icon_ = lv_label_create(lv_layer_top());
+    lv_label_set_text(mic_icon_, FONT_AWESOME_MICROPHONE);
+    lv_obj_set_style_text_font(mic_icon_, &font_awesome_20_4, 0);
+    lv_obj_set_style_text_color(mic_icon_, lv_color_hex(kMicColor), 0);
+    lv_obj_align(mic_icon_, LV_ALIGN_TOP_RIGHT, -8, 4);
+    lv_obj_add_flag(mic_icon_, LV_OBJ_FLAG_HIDDEN);
+
+    cam_icon_ = lv_label_create(lv_layer_top());
+    lv_label_set_text(cam_icon_, FONT_AWESOME_CAMERA);
+    lv_obj_set_style_text_font(cam_icon_, &font_awesome_20_4, 0);
+    lv_obj_set_style_text_color(cam_icon_, lv_color_hex(kCamColor), 0);
+    lv_obj_align(cam_icon_, LV_ALIGN_TOP_RIGHT, -30, 4);
+    lv_obj_add_flag(cam_icon_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void StackChanAvatarDisplay::UpdatePrivacyIndicators()
+{
+    const bool mic = hal_bridge::is_mic_live();
+    const bool cam = hal_bridge::is_camera_live();
+
+    if (mic_icon_ != nullptr) {
+        mic ? lv_obj_remove_flag(mic_icon_, LV_OBJ_FLAG_HIDDEN)
+            : lv_obj_add_flag(mic_icon_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (cam_icon_ != nullptr) {
+        cam ? lv_obj_remove_flag(cam_icon_, LV_OBJ_FLAG_HIDDEN)
+            : lv_obj_add_flag(cam_icon_, LV_OBJ_FLAG_HIDDEN);
+    }
+    // The button itself lights up while streaming, so the control and the indicator agree.
+    if (camera_icon_ != nullptr) {
+        lv_obj_set_style_text_color(camera_icon_,
+                                    lv_color_hex(cam ? kCamColor : kCameraIdleColor), 0);
+    }
+}
+
 void StackChanAvatarDisplay::UpdateStatusBar(bool update_all)
 {
+    UpdatePrivacyIndicators();
+
     // The avatar owns the whole screen, so there is no bar here to redraw -- the visible
     // indicator lives in the pull-down status bar (status_bar.cpp, the Link widget).
     //

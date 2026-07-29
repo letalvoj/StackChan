@@ -694,3 +694,26 @@ void hal_bridge::toggle_xiaozhi_chat_state()
     }
     app.ToggleChatState();
 }
+
+void hal_bridge::toggle_xiaozhi_chat_state_with_video()
+{
+    auto& app = Application::GetInstance();
+    if (app.GetDeviceState() == kDeviceStateStarting) {
+        return;
+    }
+    app.ToggleChatStateWithVideo();
+}
+
+bool hal_bridge::is_mic_live()
+{
+    // Listening is the only state in which microphone audio leaves the device. Speaking
+    // and idle do not capture, and saying otherwise on a privacy indicator would be
+    // worse than having no indicator at all.
+    return Application::GetInstance().GetDeviceState() == kDeviceStateListening;
+}
+
+bool hal_bridge::is_camera_live()
+{
+    auto& app = Application::GetInstance();
+    return app.IsVideoSession() && app.GetDeviceState() == kDeviceStateListening;
+}

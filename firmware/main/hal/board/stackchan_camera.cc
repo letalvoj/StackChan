@@ -402,8 +402,11 @@ bool StackChanCamera::Capture()
         return false;
     }
 
-    // Play shutter sfx
-    hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
+    // Play shutter sfx. Suppressed while streaming -- once per photo is a nice touch,
+    // once per second is a fault, and it would also fight the speaker mid-conversation.
+    if (shutter_enabled_) {
+        hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
+    }
 
     for (int i = 0; i < 3; i++) {
         struct v4l2_buffer buf = {};
@@ -1024,7 +1027,7 @@ bool StackChanCamera::SetVFlip(bool enabled)
  * @note 函数会等待之前的编码线程完成后再开始新的处理
  * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
  */
-std::string StackChanCamera::CaptureToJpeg()
+std::string StackChanCamera::CaptureToJpeg(int quality)
 {
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
@@ -1042,11 +1045,11 @@ std::string StackChanCamera::CaptureToJpeg()
     // roughly 8 KB of stack, which is more headroom than the task dispatching MCP calls
     // is guaranteed to have. Joined before returning, so the frame buffer it reads cannot
     // be recycled underneath it.
-    std::thread worker([this, &jpeg, &ok]() {
+    std::thread worker([this, &jpeg, &ok, quality]() {
         uint16_t w = frame_.width ? frame_.width : 320;
         uint16_t h = frame_.height ? frame_.height : 240;
         ok = image_to_jpeg_cb(
-            frame_.data, frame_.len, w, h, frame_.format, 80,
+            frame_.data, frame_.len, w, h, frame_.format, quality,
             [](void* arg, size_t index, const void* data, size_t len) -> size_t {
                 // Append EVERY chunk. The callback's `index` is an output offset and the
                 // encoder may emit several; keying off index == 0 the way Explain() does

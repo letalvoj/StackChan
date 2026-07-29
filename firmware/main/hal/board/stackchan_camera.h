@@ -43,6 +43,7 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    bool shutter_enabled_ = true;
 
 public:
     StackChanCamera(const esp_video_init_config_t& config);
@@ -61,7 +62,18 @@ public:
     // POSTing them to a remote VLM the way Explain() does. Same encoder, same frame --
     // only the destination differs, so a connected host can see the actual pixels rather
     // than someone else's prose about them. Empty string on failure.
-    std::string CaptureToJpeg();
+    //
+    // quality is the JPEG quality passed to the encoder. Streaming wants it lower than a
+    // one-off snapshot: the frames are transient, and both encode time and the number of
+    // bytes crossing USB scale with it.
+    std::string CaptureToJpeg(int quality = 80);
+
+    // Silence the shutter sound for the next Capture(). A shutter per frame is fine for
+    // a photo and intolerable at 1 fps, which is what camera streaming does.
+    void setShutterEnabled(bool enabled)
+    {
+        shutter_enabled_ = enabled;
+    }
 
     const uint8_t* GetFrameData()
     {

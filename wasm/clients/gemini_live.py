@@ -63,6 +63,12 @@ RESUME_WINDOW_S = 90
 # enough to ride out ordinary network jitter, small enough not to feel like lag.
 PREROLL_FRAMES = 4
 
+# Camera streaming. 1 fps is the ceiling the Live API documents for video, and it is also
+# about as fast as the device can capture and JPEG-encode without disturbing audio. The
+# poll interval is what the gate is checked at; a frame only actually leaves when the
+# device's VAD says someone is speaking.
+VIDEO_POLL_S = 1.0
+
 
 # --------------------------------------------------------------------------- env
 
@@ -207,6 +213,23 @@ TOOLS = [
     ])
 ]
 
+
+def tools_for(video_streaming: bool):
+    """The tool set, minus take_photo when frames are already streaming.
+
+    Leaving take_photo declared during a video session is worse than redundant. The model
+    is already receiving frames, so calling it adds a second image of the same scene, a
+    round trip of latency, and a capture that competes with the stream for the device's
+    CPU -- and it invites the model to say "let me take a look" when it is already
+    looking. Removing the declaration is the honest way to say "you can see continuously
+    now"; a description asking it not to call the tool would just be a suggestion.
+    """
+    if not video_streaming:
+        return TOOLS
+    kept = [f for f in TOOLS[0].function_declarations if f.name != "take_photo"]
+    return [types.Tool(function_declarations=kept)]
+
+
 # Gemini's flat tool names -> the device's namespaced MCP names.
 MCP_NAMES = {
     "set_head_angles": "self.robot.set_head_angles",
@@ -253,6 +276,12 @@ class Device:
         # Carried across device reconnects too -- a pulled cable does not end the
         # conversation, it only interrupts the transport.
         self.resumption_handle = None
+        # Set from the device's listen message when the session was started with the
+        # camera button rather than a face tap. Audio-only sessions never set it, so the
+        # camera cannot switch itself on.
+        self.video_session = False
+        # Device-side VAD, forwarded over the protocol. Camera streaming is gated on it.
+        self.voice_active = False
 
     async def connect(self):
         # ping_interval/ping_timeout are the half-open detector. When an SSH tunnel dies
@@ -295,14 +324,25 @@ class Device:
                 # The device opened the user's turn -- this is the tap, or the device
                 # re-opening the turn after it finished speaking.
                 if data.get("state") == "start":
+                    # "video":true means the camera button was used. Absent on older
+                    # firmware and on plain taps, which is exactly the audio-only default.
+                    self.video_session = bool(data.get("video"))
                     self.listening.set()
-                    print("● listening (tap registered)", flush=True)
+                    print(f"● listening ({'camera + mic' if self.video_session else 'mic only'})",
+                          flush=True)
                 elif data.get("state") == "stop":
                     self.listening.clear()
+                    self.voice_active = False
+            elif kind == "vad":
+                # Device-side VAD. Camera streaming is gated on this: frames only while
+                # someone is actually speaking.
+                self.voice_active = (data.get("state") == "speech")
             elif kind == "tts":
                 pass
             elif kind == "goodbye":
                 self.listening.clear()
+                self.voice_active = False
+                self.video_session = False
 
     async def call(self, mcp_name: str, arguments: dict, timeout=10.0):
         """One MCP tools/call, awaited by id."""
@@ -549,6 +589,42 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
 async def converse(device: Device, session):
     """Bridge one live session: mic up, audio down, tool calls across."""
 
+    async def video_uplink():
+        """Camera frames at <= 1 fps, only while the device's VAD hears speech.
+
+        Three constraints shape this, and they all point the same way:
+
+        * Every frame is permanently in the context window. A continuous 1 fps stream
+          fills it with pictures of an empty room and pushes the actual conversation out.
+        * Capture on the device is genuinely expensive -- a sensor read plus a JPEG
+          encode -- and it shares a CPU with the audio pipeline.
+        * The moment a picture is worth anything is when someone is talking about what
+          they are showing.
+
+        So VAD is the gate, not a timer. Silence costs nothing at all.
+        """
+        while True:
+            await asyncio.sleep(VIDEO_POLL_S)
+            if not (device.video_session and device.listening.is_set() and device.voice_active):
+                continue
+
+            reply = await device.call("self.camera.capture", {"stream": True}, timeout=20.0)
+            if "error" in reply:
+                print(f"  ⚠ camera: {reply['error']}", flush=True)
+                # Back off rather than hammering a camera that is refusing.
+                await asyncio.sleep(3.0)
+                continue
+            jpeg = extract_jpeg(reply)
+            if not jpeg:
+                continue
+
+            # Realtime lane is CORRECT here, unlike the one-shot photo. A stream wants
+            # audio-clock ordering: frames are continuous context for whatever is being
+            # said around them, not a turn that must complete before the model may answer.
+            await session.send_realtime_input(
+                video=types.Blob(data=jpeg, mime_type="image/jpeg"))
+            print(f"  🎥 {len(jpeg)}B", flush=True)
+
     async def uplink():
         while True:
             pcm = await device.mic.get()
@@ -612,7 +688,7 @@ async def converse(device: Device, session):
                             turn_complete=True,
                         )
 
-    await asyncio.gather(uplink(), downlink(), device.pace())
+    await asyncio.gather(uplink(), downlink(), device.pace(), video_uplink())
 
 
 async def main():
@@ -716,14 +792,21 @@ async def run_link(device, client, config, args):
             while True:
                 await device.listening.wait()
                 try:
+                    # video_session is already known here: the session only opens once the
+                    # device's listen message has arrived, and that message is what
+                    # carries the flag. So the tool set can be decided per session rather
+                    # than guessed up front.
                     attempt = config.model_copy(update={
                         "session_resumption": types.SessionResumptionConfig(
-                            handle=device.resumption_handle)})
+                            handle=device.resumption_handle),
+                        "tools": tools_for(device.video_session)})
                     resumed = device.resumption_handle is not None
                     async with client.aio.live.connect(model=args.model,
                                                        config=attempt) as session:
                         print(f"▶ Gemini Live session {'resumed' if resumed else 'open'}"
-                              f" ({args.model}, voice {args.voice})", flush=True)
+                              f" ({args.model}, voice {args.voice}"
+                              f"{', camera streaming' if device.video_session else ''})",
+                              flush=True)
                         await converse(device, session)
                 except asyncio.CancelledError:
                     raise

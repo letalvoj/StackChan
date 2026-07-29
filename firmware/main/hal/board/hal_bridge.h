@@ -47,6 +47,15 @@ bool is_xiaozhi_mode();
 void set_xiaozhi_mode(bool mode);
 void toggle_xiaozhi_chat_state();
 
+// Same, but asks the client to stream camera frames alongside audio. Bound to the camera
+// button rather than the face, so a tap never silently switches the camera on.
+void toggle_xiaozhi_chat_state_with_video();
+
+// What is currently being captured, for the privacy indicators. Microphone is live
+// whenever the device is listening; camera only during a video session.
+bool is_mic_live();
+bool is_camera_live();
+
 void disply_lvgl_lock();
 void disply_lvgl_unlock();
 lv_disp_t* display_get_lvgl_display();

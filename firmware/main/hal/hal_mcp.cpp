@@ -165,22 +165,36 @@ void Hal::xiaozhi_mcp_init()
                        "Take a photo with your camera and return the image itself. Use this "
                        "whenever you are asked to look at something, or to see what is in "
                        "front of you. Point your head first if the subject is to one side.",
-                       std::vector<Property>{}, [this](const PropertyList& properties) -> ReturnValue {
+                       PropertyList({
+                           // `stream` is for a client pulling frames continuously, not for
+                           // the model: it silences the shutter and drops JPEG quality,
+                           // because at 1 fps the sound is intolerable and both encode time
+                           // and USB bytes scale with quality. A single photo should stay
+                           // sharp and should click.
+                           Property("stream", kPropertyTypeBoolean, false),
+                       }),
+                       [this](const PropertyList& properties) -> ReturnValue {
                            auto camera = hal_bridge::board_get_camera();
                            if (camera == nullptr) {
                                throw std::runtime_error("No camera on this board");
                            }
+                           const bool stream = properties["stream"].value<bool>();
+
                            // Capture runs at lowered priority upstream; keep that -- the
                            // sensor read is long and must not starve audio.
                            TaskPriorityReset priority_reset(1);
-                           if (!camera->Capture()) {
+                           camera->setShutterEnabled(!stream);
+                           const bool ok = camera->Capture();
+                           camera->setShutterEnabled(true);   // restore for the next photo
+                           if (!ok) {
                                throw std::runtime_error("Failed to capture photo");
                            }
-                           auto jpeg = camera->CaptureToJpeg();
+                           auto jpeg = camera->CaptureToJpeg(stream ? 55 : 80);
                            if (jpeg.empty()) {
                                throw std::runtime_error("Failed to encode photo");
                            }
-                           mclog::tagInfo(_tag, "camera.capture: {} bytes of JPEG", jpeg.size());
+                           mclog::tagInfo(_tag, "camera.capture{}: {} bytes of JPEG",
+                                          stream ? " (stream)" : "", jpeg.size());
                            // McpServer takes ownership and frees it after serialising.
                            return new ImageContent("image/jpeg", jpeg);
                        });
