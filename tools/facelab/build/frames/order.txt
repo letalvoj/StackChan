@@ -1,0 +1,12 @@
+neutral
+happy
+angry
+sad
+doubt
+sleepy
+blink
+halfblink
+speak-sm
+speak-md
+speak-lg
+happytalk
