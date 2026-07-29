@@ -281,26 +281,50 @@ async def main():
         set_list = JOKES
 
     url = f"ws://{args.host}:{args.port}/ws"
-    print(f"connecting to {url} …", flush=True)
-    async with websockets.connect(url, open_timeout=20, max_size=None) as ws:
-        sid = str(uuid.uuid4())
-        await ws.send(json.dumps({
-            "type": "hello", "transport": "websocket", "session_id": sid,
-            "audio_params": {"format": "opus", "sample_rate": SR,
-                             "frame_duration": FRAME_MS}}))
-        await asyncio.sleep(0.6)
-        codec = codec_from_hello({"audio_params": {
-            "format": "opus", "sample_rate": SR, "frame_duration": FRAME_MS}})
+    total = len(set_list)
 
-        c = Comedian(ws, sid, codec, args.voice)
-        total = len(set_list)
-        for n, joke in enumerate(set_list, 1):
-            print(f"\n▶ joke {n}/{total}", flush=True)
-            await perform(c, joke, args.name)
-            if n < total:
-                print(f"   … next in {args.every / 60:.0f} min", flush=True)
-                await asyncio.sleep(args.every)
-        print("\n✓ that's my time, you've been wonderful", flush=True)
+    for n, joke in enumerate(set_list, 1):
+        print(f"\n▶ joke {n}/{total}", flush=True)
+
+        # A FRESH CONNECTION PER JOKE.
+        #
+        # The first version held one socket for the whole set and died after joke two:
+        # `keepalive ping timeout`, five minutes into an idle gap. Holding a link open
+        # across a long silence buys nothing here -- there is nothing to receive between
+        # jokes -- and it turns every gap into a chance for the set to end early, which
+        # is the one failure that actually matters when someone is watching.
+        #
+        # Connecting per joke also hands the device back between bits, so the robot sits
+        # there idling like a comedian waiting rather than holding a session open.
+        for attempt in range(3):
+            try:
+                async with websockets.connect(url, open_timeout=20, max_size=None,
+                                              ping_interval=20, ping_timeout=60) as ws:
+                    sid = str(uuid.uuid4())
+                    await ws.send(json.dumps({
+                        "type": "hello", "transport": "websocket", "session_id": sid,
+                        "audio_params": {"format": "opus", "sample_rate": SR,
+                                         "frame_duration": FRAME_MS}}))
+                    await asyncio.sleep(0.6)
+                    codec = codec_from_hello({"audio_params": {
+                        "format": "opus", "sample_rate": SR, "frame_duration": FRAME_MS}})
+
+                    c = Comedian(ws, sid, codec, args.voice)
+                    await perform(c, joke, args.name)
+                break
+            except Exception as exc:
+                # Never let one dropped joke end the set -- the audience is in the room.
+                print(f"   ⚠ {type(exc).__name__}: {exc}", flush=True)
+                if attempt == 2:
+                    print("   … skipping this one", flush=True)
+                else:
+                    await asyncio.sleep(2.0)
+
+        if n < total:
+            print(f"   … next in {args.every / 60:.0f} min", flush=True)
+            await asyncio.sleep(args.every)
+
+    print("\n✓ that's my time, you've been wonderful", flush=True)
 
 
 if __name__ == "__main__":
