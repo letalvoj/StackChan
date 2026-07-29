@@ -7,6 +7,7 @@
 
 #include "esp_network.h"
 #include "display.h"
+#include "audio_codec.h"   // output_volume() for the status report
 #include "assets/lang_config.h"
 #include "font_awesome.h"
 
@@ -360,6 +361,37 @@ std::string UsbNetBoard::GetDeviceStatusJson() {
     cJSON_AddStringToObject(network, "type", "usb-ncm");
     cJSON_AddBoolToObject(network, "connected", host_attached_);
     cJSON_AddItemToObject(root, "network", network);
+
+    // Everything an agent might reasonably want to say out loud about itself. The old
+    // version reported only the network, so "how are you doing?" could be answered with
+    // exactly one fact -- and the volume and brightness tools told the model to check
+    // status first, then gave it no volume or brightness to check.
+    int level = 0;
+    bool charging = false, discharging = false;
+    if (GetBatteryLevel(level, charging, discharging)) {
+        cJSON* battery = cJSON_CreateObject();
+        cJSON_AddNumberToObject(battery, "level", level);
+        cJSON_AddBoolToObject(battery, "charging", charging);
+        cJSON_AddItemToObject(root, "battery", battery);
+    }
+
+    auto* codec = GetAudioCodec();
+    if (codec != nullptr) {
+        cJSON* speaker = cJSON_CreateObject();
+        cJSON_AddNumberToObject(speaker, "volume", codec->output_volume());
+        cJSON_AddItemToObject(root, "audio_speaker", speaker);
+    }
+
+    auto* backlight = GetBacklight();
+    if (backlight != nullptr) {
+        cJSON* screen = cJSON_CreateObject();
+        cJSON_AddNumberToObject(screen, "brightness", backlight->brightness());
+        cJSON_AddItemToObject(root, "screen", screen);
+    }
+
+    // Uptime is the cheapest way for it to answer "how long have you been on?", which is
+    // the sort of small self-knowledge that makes a desk robot feel present.
+    cJSON_AddNumberToObject(root, "uptime_s", (double)(esp_timer_get_time() / 1000000));
 
     char* str = cJSON_PrintUnformatted(root);
     std::string result(str ? str : "{}");

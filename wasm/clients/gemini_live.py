@@ -214,6 +214,52 @@ TOOLS = [
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
         ),
         types.FunctionDeclaration(
+            name="play_sound",
+            description=(
+                "Play a short sound effect: success, exclamation, popup, welcome, "
+                "vibration. A chirp lands where a spoken 'ta-da' is just more talking. "
+                "Punctuation, not decoration -- never on every turn."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={"name": types.Schema(
+                    type=types.Type.STRING,
+                    description="success, exclamation, popup, welcome or vibration")},
+                required=["name"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="set_reminder",
+            description=(
+                "Set a timer that will make you speak up when it expires. Good for "
+                "'remind me in ten minutes' or a pomodoro. Duration is in SECONDS."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "duration_seconds": types.Schema(type=types.Type.INTEGER),
+                    "message": types.Schema(type=types.Type.STRING,
+                                            description="what to say when it fires"),
+                    "repeat": types.Schema(type=types.Type.BOOLEAN),
+                },
+                required=["duration_seconds", "message"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_reminders",
+            description="What timers are currently running.",
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="cancel_reminder",
+            description="Cancel a timer by its id, from list_reminders.",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={"id": types.Schema(type=types.Type.INTEGER)},
+                required=["id"],
+            ),
+        ),
+        types.FunctionDeclaration(
             name="get_device_status",
             description=("Your own real-time status: battery, network, speaker volume, "
                          "screen brightness. Call this before changing volume or brightness."),
@@ -264,6 +310,10 @@ MCP_NAMES = {
     # Our own tool, registered in hal_mcp.cpp. NOT upstream's self.camera.take_photo,
     # which POSTs the frame to a remote VLM and returns prose about it.
     "take_photo": "self.camera.capture",
+    "play_sound": "self.robot.play_sound",
+    "set_reminder": "self.robot.create_reminder",
+    "list_reminders": "self.robot.get_reminders",
+    "cancel_reminder": "self.robot.stop_reminder",
     "get_device_status": "self.get_device_status",
     "set_volume": "self.audio_speaker.set_volume",
     "set_brightness": "self.screen.set_brightness",
@@ -684,12 +734,20 @@ async def converse(device: Device, session):
         robot that says "you touched me!" every single time is a car alarm. The note lands
         in context, and the model can mention it, or not, when it next speaks naturally.
 
-        Phrased as a third-person stage direction so it reads as something that happened
-        rather than as the user having said it.
+        PHRASING MATTERS MORE THAN IT LOOKS. These arrive as role="user" content, which is
+        the only channel available mid-session -- so anything in the third person ("someone
+        is petting the robot") reads as the USER SAYING those words, about a robot, from
+        outside. The model then answers the sentence instead of feeling the touch.
+
+        So: second person, present tense, addressed to the model as its own sensation, and
+        tagged [SENSOR] so it is unmistakably instrumentation rather than speech. The system
+        instruction explains the tag; the two have to agree or the tag is just noise.
         """
         NOTE = {
-            "head_pet": "(Someone is petting the robot's head right now.)",
-            "shaken": "(Someone just picked the robot up and shook it around.)",
+            "head_pet": "[SENSOR] Someone is stroking the top of your head right now. "
+                        "You can feel it.",
+            "shaken": "[SENSOR] You have just been picked up and shaken about. "
+                      "Everything is still wobbling.",
         }
         while True:
             ev = await device.sensor_events.get()

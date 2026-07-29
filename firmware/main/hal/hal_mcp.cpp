@@ -11,6 +11,7 @@
 #include <apps/common/common.h>
 #include "board/hal_bridge.h"
 #include "board/stackchan_camera.h"
+#include <assets/lang_config.h>   // Lang::Sounds::OGG_*
 
 using namespace stackchan;
 
@@ -155,6 +156,36 @@ void Hal::xiaozhi_mcp_init()
                            int id = properties["id"].value<int>();
                            mclog::tagInfo(_tag, "stop_reminder: id={}", id);
                            tools::stop_reminder(id);
+                           return true;
+                       });
+
+    // Sound effects. A voice can only do so much: a little chirp lands where a spoken
+    // "ta-da" is just more talking, and these are already on the device as assets.
+    mclog::tagInfo(_tag, "add robot.play_sound tool");
+    mcp_server.AddTool("self.robot.play_sound",
+                       "Play a short sound effect. Use sparingly, as punctuation rather than "
+                       "decoration: success when something worked, exclamation for surprise or "
+                       "a mistake, popup to get attention, welcome for a greeting, vibration "
+                       "for a buzz. Never play one on every turn.",
+                       PropertyList({Property("name", kPropertyTypeString)}),
+                       [this](const PropertyList& properties) -> ReturnValue {
+                           const auto name = properties["name"].value<std::string>();
+                           // An explicit allowlist: the sound name comes from a model, and
+                           // the asset lookup takes whatever it is handed.
+                           if (name == "success") {
+                               hal_bridge::app_play_sound(Lang::Sounds::OGG_SUCCESS);
+                           } else if (name == "exclamation") {
+                               hal_bridge::app_play_sound(Lang::Sounds::OGG_EXCLAMATION);
+                           } else if (name == "popup") {
+                               hal_bridge::app_play_sound(Lang::Sounds::OGG_POPUP);
+                           } else if (name == "welcome") {
+                               hal_bridge::app_play_sound(Lang::Sounds::OGG_WELCOME);
+                           } else if (name == "vibration") {
+                               hal_bridge::app_play_sound(Lang::Sounds::OGG_VIBRATION);
+                           } else {
+                               throw std::runtime_error("unknown sound: " + name);
+                           }
+                           mclog::tagInfo(_tag, "play_sound: {}", name);
                            return true;
                        });
 
