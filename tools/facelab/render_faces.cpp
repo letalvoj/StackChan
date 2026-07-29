@@ -15,16 +15,40 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
 #include "../../firmware/main/stackchan/avatar/skins/default/default.h"
 #include "../../firmware/main/stackchan/avatar/skins/cute/cute.h"
+#include "../../firmware/main/stackchan/avatar/decorators/decorators.h"
+#include "../../firmware/main/hal/hal.h"
 
 using namespace stackchan::avatar;
 
 static constexpr int kW = 320;
 static constexpr int kH = 240;
+
+// ------------------------------------------------------------------ minimal HAL stub
+//
+// The decorators are the only avatar code that reaches outside the skin, and all they
+// want is a millisecond clock for their animation timers. Rather than link the real HAL
+// (which drags in servos, FreeRTOS, power management and a display driver, none of which
+// a static face render needs) we satisfy exactly the two symbols the linker asks for.
+//
+// millis() touches no members, so the storage below is never actually read as a Hal --
+// it exists only to hand back a reference of the right type.
+std::uint32_t Hal::millis()
+{
+    return (std::uint32_t)(clock() * 1000ull / CLOCKS_PER_SEC);
+}
+
+alignas(16) static unsigned char g_hal_storage[4096];
+
+Hal& GetHAL()
+{
+    return *reinterpret_cast<Hal*>(g_hal_storage);
+}
 
 // ------------------------------------------------------------------ LVGL host display
 
@@ -97,11 +121,18 @@ static void settle()
     lv_refr_now(nullptr);
 }
 
+// Which overlay to attach, if any. These are NOT emotions -- they are separate Decorator
+// objects the modifiers add on top of the face (head-pet shows heart + shy, the IMU shows
+// dizzy), and leaving them out of the grid meant a third of what the robot actually
+// displays was never being reviewed.
+enum class Deco { None, Heart, Shy, Angry, Sweat, Dizzy };
+
 struct Shot {
     std::string name;
     Emotion emotion;
     int eye_weight;    // -1 = leave at the emotion's own value
     int mouth_weight;
+    Deco deco = Deco::None;
 };
 
 int main(int argc, char** argv)
@@ -143,15 +174,41 @@ int main(int argc, char** argv)
         {"doubt",    Emotion::Doubt,   -1, -1},
         {"sleepy",   Emotion::Sleepy,  -1, -1},
         {"blink",    Emotion::Neutral,  0, -1},
-        {"halfblink",Emotion::Neutral, 50, -1},
-        {"speak-sm", Emotion::Neutral, -1, 35},
-        {"speak-md", Emotion::Neutral, -1, 70},
+        {"halfblink",Emotion::Neutral, 32, -1},
+        {"speak-sm", Emotion::Neutral, -1, 30},
+        {"speak-md", Emotion::Neutral, -1, 65},
         {"speak-lg", Emotion::Neutral, -1, 100},
         {"happytalk",Emotion::Happy,   -1, 80},
+
+        // Decorators. head-pet shows heart+shy together, so that combination gets its own
+        // tile -- it is what you actually see when you rub the robot's head.
+        {"deco:heart",     Emotion::Happy,   -1, -1, Deco::Heart},
+        {"deco:shy",       Emotion::Happy,   -1, -1, Deco::Shy},
+        {"headpet",        Emotion::Happy,   -1, -1, Deco::Heart},   // + shy, added below
+        {"deco:angrymark", Emotion::Angry,   -1, -1, Deco::Angry},
+        {"deco:sweat",     Emotion::Sad,     -1, -1, Deco::Sweat},
+        {"deco:dizzy",     Emotion::Doubt,   -1, -1, Deco::Dizzy},
     };
 
     for (const auto& s : shots) {
         avatar->setEmotion(s.emotion);
+
+        std::vector<int> decos;
+        auto add = [&](Deco d) {
+            lv_obj_t* p = lv_screen_active();
+            switch (d) {
+                case Deco::Heart: decos.push_back(avatar->addDecorator(std::make_unique<HeartDecorator>(p, 0, 0))); break;
+                case Deco::Shy:   decos.push_back(avatar->addDecorator(std::make_unique<ShyDecorator>(p, 0)));      break;
+                case Deco::Angry: decos.push_back(avatar->addDecorator(std::make_unique<AngryDecorator>(p, 0)));    break;
+                case Deco::Sweat: decos.push_back(avatar->addDecorator(std::make_unique<SweatDecorator>(p, 0)));    break;
+                case Deco::Dizzy: decos.push_back(avatar->addDecorator(std::make_unique<DizzyDecorator>(p, 0)));    break;
+                case Deco::None:  break;
+            }
+        };
+        add(s.deco);
+        if (s.name == "headpet") {
+            add(Deco::Shy);          // head-pet shows both at once
+        }
         if (s.eye_weight >= 0) {
             avatar->leftEye().setWeight(s.eye_weight);
             avatar->rightEye().setWeight(s.eye_weight);
@@ -161,8 +218,16 @@ int main(int argc, char** argv)
         }
         avatar->update();
         settle();
-        write_bmp(out + "/" + s.name + ".bmp");
+        std::string safe = s.name;
+        for (auto& c : safe) if (c == ':') c = '_';
+        write_bmp(out + "/" + safe + ".bmp");
         printf("%s\n", s.name.c_str());
+
+        for (int id : decos) {
+            avatar->removeDecorator(id);
+        }
+        avatar->update();
+        settle();
     }
     return 0;
 }

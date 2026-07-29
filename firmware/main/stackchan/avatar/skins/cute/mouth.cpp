@@ -9,11 +9,13 @@ using namespace uitk;
 using namespace uitk::lvgl_cpp;
 using namespace stackchan::avatar;
 
-static const Vector2i _mouth_pos        = Vector2i(0, 40);
+// Higher and smaller than the first pass. A mouth low on the face reads adult and a
+// bit glum; lifting it and shrinking it is most of what makes a face read as babyish.
+static const Vector2i _mouth_pos        = Vector2i(0, 28);
 static const Vector2i _mouth_min_offset = Vector2i(-12, -12);
 static const Vector2i _mouth_max_offset = Vector2i(12, 12);
 
-static const int _smile_size   = 74;    // bounding box of the arc
+static const int _smile_size   = 58;    // bounding box of the arc
 static const int _smile_width  = 7;     // stroke thickness
 
 // Handoff band: the smile holds until the mouth is clearly opening, then swaps quickly.
@@ -21,11 +23,13 @@ static const int _smile_width  = 7;     // stroke thickness
 // overlapping, which reads as grey mush rather than a mouth -- so the swap is quick
 // enough that speech never lingers there. At 30 fps a fast swap looks like a mouth
 // opening; a slow one looks like a rendering bug.
-static const int kSmileHold = 24;
-static const int kSwap      = 33;
+static const int kSmileHold = 11;
+static const int kSwap      = 19;
 
-static const Vector2i _open_min_size = Vector2i(26, 10);
-static const Vector2i _open_max_size = Vector2i(58, 46);
+// Quiet speech should be a small movement, and a wide-open mouth is TALLER than it is
+// wide -- widening it instead just looks like a grimace.
+static const Vector2i _open_min_size = Vector2i(14, 5);
+static const Vector2i _open_max_size = Vector2i(46, 60);
 
 CuteMouth::CuteMouth(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t secondaryColor)
 {
@@ -147,7 +151,8 @@ void CuteMouth::setEmotion(const Emotion& emotion)
             lv_arc_set_angles(_smile, 40, 110);      // short, off-centre: unsure
             break;
         case Emotion::Sleepy:
-            lv_arc_set_angles(_smile, 60, 120);      // small
+            lv_arc_set_angles(_smile, 45, 135);      // small but SYMMETRIC and shallow;
+                                                     // a tight arc here reads as a smirk
             break;
         case Emotion::Neutral:
         default:

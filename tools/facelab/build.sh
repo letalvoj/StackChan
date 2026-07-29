@@ -31,11 +31,14 @@ fi
 
 SMOOTH_SRCS=$(find "$FW/components/smooth_ui_toolkit/src" -name '*.cpp')
 SKIN_SRCS=$(find "$FW/main/stackchan/avatar/skins" -name '*.cpp')
+# Decorators are overlays (heart, blush, sweat, dizzy) drawn on top of the face --
+# a third of what the robot displays, and easy to forget because no emotion selects them.
+SKIN_SRCS="$SKIN_SRCS $(find "$FW/main/stackchan/avatar/decorators" -name '*.cpp')"
 # The speech bubble's arrow is a compiled-in image asset. It MUST be compiled as C:
 # clang++ treats .c as C++, where a file-scope `const` has internal linkage, so the
 # symbol silently vanishes and the link fails with an undefined reference.
 ASSET_OBJS=""
-for a in $(find "$FW/main/stackchan/avatar/skins" -name '*.c'); do
+for a in $(find "$FW/main/stackchan/avatar/skins" "$FW/main/stackchan/avatar/decorators" -name '*.c'); do
   o="$OUT/$(basename "$a" .c).o"
   cc -c "$a" -o "$o" -O2 -w -DLV_CONF_INCLUDE_SIMPLE=1 \
      -I"$ROOT/wasm/shims" -I"$LVGL" -I"$LVGL/src"
@@ -45,11 +48,18 @@ done
 # shellcheck disable=SC2086
 c++ -std=c++17 -O2 -w \
     -DLV_CONF_INCLUDE_SIMPLE=1 \
+    -DFIRMWARE_VERSION='"facelab"' \
+    -DBOARD_NAME='"facelab"' -DBOARD_TYPE='"facelab"' \
     -I"$ROOT/wasm/shims" -I"$LVGL" -I"$LVGL/src" \
     -I"$FW/components/smooth_ui_toolkit/src" \
     -I"$FW/components/smooth_ui_toolkit/src/lvgl" \
     -I"$FW/components/smooth_ui_toolkit/src/uitk" \
     -I"$FW/main" \
+    -I"$FW/xiaozhi-esp32/main" \
+    -I"$FW/xiaozhi-esp32/main/display" \
+    -I"$FW/xiaozhi-esp32/main/display/lvgl_display" \
+    -I"$FW/components/mooncake/src" \
+    -I"$FW/components/mooncake_log/src" \
     "$HERE/render_faces.cpp" $SKIN_SRCS $ASSET_OBJS $SMOOTH_SRCS \
     "$OUT/liblvgl.a" \
     -o "$OUT/render_faces"

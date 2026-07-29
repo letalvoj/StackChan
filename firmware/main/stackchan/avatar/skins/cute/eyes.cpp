@@ -140,25 +140,30 @@ void CuteEyes::setEmotion(const Emotion& emotion)
         setRotation(_is_left_eye ? rotation : (3600 - rotation) % 3600);
     };
 
+    // Rotation near 180 degrees flips the lid to come from the BOTTOM of the eye, which
+    // is the ^_^ squint. That distinction matters more than any other value here: a lid
+    // descending from the top is a glare no matter how you tune it, and it is why the
+    // first pass had a "happy" face that looked ready for a fight.
     switch (emotion) {
         case Emotion::Happy:
-            // Lids down a touch and tilted outward: a soft, pleased squint.
-            apply(78, 150);
+            // Lid rises from below: pleased, not narrowed.
+            apply(72, 1550);
             break;
         case Emotion::Angry:
-            // Inner corners driven down -- the classic V brow.
-            apply(62, 3400);
+            // Inner corners DOWN. Sign convention matches the default skin, which I had
+            // inverted -- angry read as sad and sad as angry.
+            apply(66, 450);
             break;
         case Emotion::Sad:
-            // Opposite tilt to angry, lids lower.
-            apply(58, 250);
+            // Inner corners UP: the opposite tilt, and the opposite reading.
+            apply(64, 3200);
             break;
         case Emotion::Doubt:
-            // One-sided feel: mostly open, slight tilt.
-            apply(70, 3520);
+            apply(76, 3520);
             break;
         case Emotion::Sleepy:
-            apply(26, 60);
+            // Heavy lids, barely tilted. Any real tilt here turns drowsy into smug.
+            apply(28, 3550);
             break;
         case Emotion::Neutral:
         default:

@@ -10,3 +10,17 @@ speak-sm
 speak-md
 speak-lg
 happytalk
+[Warn]	(23.793, +23793)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+[Warn]	(23.793, +0)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+deco:heart
+[Warn]	(25.773, +1980)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+[Warn]	(25.773, +0)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+deco:shy
+[Warn]	(27.753, +1980)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+[Warn]	(27.753, +0)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+[Warn]	(27.753, +0)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+[Warn]	(27.753, +0)	 lv_draw_buf_init: Data is not aligned, ignored lv_draw_buf.c:245
+headpet
+deco:angrymark
+deco:sweat
+deco:dizzy

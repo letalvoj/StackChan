@@ -21,7 +21,8 @@ rm -f "$TMP"/*.bmp "$TMP"/*.png
 
 TILES=()
 while read -r name; do
-    src="$TMP/$name.bmp"
+    safe="$(echo "$name" | tr ":" "_")"
+    src="$TMP/$safe.bmp"
     [ -f "$src" ] || continue
     # Label above the frame; -background/-splice keeps the face pixels untouched so the
     # grid shows exactly what was rendered, not a resampled approximation.
@@ -29,8 +30,8 @@ while read -r name; do
         -bordercolor '#303030' -border 1 \
         -background '#101010' -fill '#e0e0e0' -pointsize 15 \
         label:"$name" +swap -gravity center -append \
-        "$TMP/$name.png"
-    TILES+=("$TMP/$name.png")
+        "$TMP/$safe.png"
+    TILES+=("$TMP/$safe.png")
 done < "$TMP/order.txt"
 
 montage "${TILES[@]}" \
