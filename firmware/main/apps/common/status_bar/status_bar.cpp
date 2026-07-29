@@ -12,6 +12,7 @@
 #include <assets/assets.h>
 #include <fmt/chrono.h>
 #include <hal/hal.h>
+#include <hal/board/hal_bridge.h>
 #include <memory>
 #include <vector>
 #include <lvgl.h>
@@ -234,7 +235,7 @@ public:
     Wifi(lv_obj_t* parent, uint32_t colorPrimary)
     {
         _wifi_icon = std::make_unique<Image>(parent);
-        _wifi_icon->align(LV_ALIGN_LEFT_MID, 11, 0);
+        _wifi_icon->align(LV_ALIGN_LEFT_MID, 58, 0);  // Link owns the far left
         _wifi_icon->setImageRecolor(lv_color_hex(colorPrimary));
         _wifi_icon->setImageRecolorOpa(LV_OPA_COVER);
 
@@ -276,6 +277,52 @@ private:
     lv_image_dsc_t _icon_wifi_slash;
 };
 
+/**
+ * @brief Transport link indicator: which protocol, and whether a host is on it.
+ *
+ * Sits at the far left, where the eye lands first. The Wifi widget next to it reports
+ * the radio, which is silent on a USB build -- this reports the thing that actually
+ * carries the conversation, and without it "why is nothing happening" has no answer
+ * short of attaching a serial cable.
+ *
+ * The status bar auto-hides, so this is the *detail* view; the persistent signal is the
+ * idle LED going pale red (see StackChanAvatarDisplay::UpdateStatusBar).
+ */
+class Link : public Widget {
+public:
+    Link(lv_obj_t* parent, uint32_t colorPrimary)
+    {
+        _label = std::make_unique<Label>(parent);
+        _label->setTextFont(&lv_font_montserrat_16);
+        _label->align(LV_ALIGN_LEFT_MID, 11, 0);
+        _colorPrimary = colorPrimary;
+        update();
+    }
+
+    void update() override
+    {
+        bool connected = hal_bridge::is_host_connected();
+        if (connected == _last_connected && _label_set) {
+            return;
+        }
+        _last_connected = connected;
+        _label_set      = true;
+
+        _label->setText(fmt::format("{}{}", hal_bridge::transport_label(),
+                                    connected ? "" : " ×"));
+        // Pale red rather than a hard red: an unattended robot with no host is waiting,
+        // not broken, and should not look like it is throwing an error.
+        _label->setTextColor(connected ? lv_color_hex(_colorPrimary)
+                                       : lv_palette_lighten(LV_PALETTE_RED, 1));
+    }
+
+private:
+    std::unique_ptr<Label> _label;
+    uint32_t _colorPrimary = 0;
+    bool _last_connected   = false;
+    bool _label_set        = false;
+};
+
 class StatusBarView {
 public:
     StatusBarView(lv_obj_t* parent, uint32_t colorSecondary, uint32_t colorPrimary)
@@ -293,6 +340,7 @@ public:
         _widgets.push_back(std::make_unique<TimeLabel>(_panel->get(), colorPrimary));
         _widgets.push_back(std::make_unique<Battery>(_panel->get(), colorSecondary, colorPrimary));
         _widgets.push_back(std::make_unique<Wifi>(_panel->get(), colorPrimary));
+        _widgets.push_back(std::make_unique<Link>(_panel->get(), colorPrimary));
 
         _panel->setPos(0, _pos_y_hide);
         _pos_y_anim.springOptions().bounce         = 0.1;

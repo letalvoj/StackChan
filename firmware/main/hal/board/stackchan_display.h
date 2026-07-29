@@ -17,6 +17,10 @@ private:
     esp_lcd_panel_handle_t panel_       = nullptr;
     AvatarController controller_;
 
+    // Last connection state the LED was painted for; -1 = never, so the first tick
+    // always paints. See UpdateStatusBar().
+    int conn_last_state_ = -1;
+
     lv_obj_t* preview_image_                         = nullptr;
     esp_timer_handle_t preview_timer_                = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;

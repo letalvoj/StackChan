@@ -12,6 +12,8 @@
 #include <cstring>
 #include <src/misc/cache/lv_cache.h>
 #include <settings.h>
+#include "hal_bridge.h"
+#include <cstdio>
 #include <lvgl.h>
 #include <lvgl_theme.h>
 #include <stackchan/stackchan.h>
@@ -346,6 +348,29 @@ void StackChanAvatarDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image)
 
 void StackChanAvatarDisplay::UpdateStatusBar(bool update_all)
 {
+    // The avatar owns the whole screen, so there is no bar here to redraw -- the visible
+    // indicator lives in the pull-down status bar (status_bar.cpp, the Link widget).
+    //
+    // What this tick is for is the LED. The idle colour is chosen in SetStatus(), which
+    // only fires on a *status change*, so a device that connects or disconnects while
+    // already sitting idle would keep whatever colour it had -- stuck pale red after the
+    // host arrives, or misleadingly dark after it leaves. Once a second is plenty.
+    //
+    // Only while idle: during a conversation the listening/speaking colours must win,
+    // and connection state is self-evident anyway when something is talking to you.
+    const bool connected = hal_bridge::is_host_connected();
+    const int state = connected ? 1 : 0;
+    if (state == conn_last_state_ && !update_all) {
+        return;
+    }
+    conn_last_state_ = state;
+
+    if (hal_bridge::is_xiaozhi_idle()) {
+        // Pale red (24/255) rather than a hard red: waiting for a host is a normal
+        // resting state, not a fault, and an unattended robot should not look alarmed.
+        GetHAL().setRgbColor(0, connected ? 0 : 24, 0, 0);
+        GetHAL().refreshRgb();
+    }
 }
 
 void StackChanAvatarDisplay::SetTheme(Theme* theme)

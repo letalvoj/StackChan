@@ -46,6 +46,13 @@ public:
     // True once a host has completed the WebSocket handshake.
     bool HasClient() const { return client_fd_ >= 0; }
 
+    // Is a host connected right now? Static so UI code can ask without owning a
+    // reference. Returns false when the protocol does not exist yet (early boot) or
+    // when this build has no USB transport, which is the honest answer in both cases.
+    static bool IsHostConnected() {
+        return instance_ != nullptr && instance_->HasClient();
+    }
+
 private:
     httpd_handle_t server_ = nullptr;
     EventGroupHandle_t event_group_ = nullptr;

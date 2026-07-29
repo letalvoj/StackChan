@@ -105,7 +105,18 @@ void AvatarController::SetStatus(const char* status) {
 
         is_idle = true;
 
-        GetHAL().setRgbColor(0, 0, 0, 0);
+        // Idle has two meanings and they deserve to look different: waiting for you to
+        // talk, versus nobody is even connected. Pale red says "I am fine, but there is
+        // no host" -- pale rather than bright so an unattended robot on a shelf is not
+        // shouting an error it does not have. Off means ready.
+        //
+        // Only the idle colour carries this; listening/speaking keep their own colours,
+        // because during a conversation the connection state is self-evident.
+        if (!hal_bridge::is_host_connected()) {
+            GetHAL().setRgbColor(0, 24, 0, 0);
+        } else {
+            GetHAL().setRgbColor(0, 0, 0, 0);
+        }
         GetHAL().refreshRgb();
         ESP_LOGI(TAG, "Status -> STANDBY");
 

@@ -12,6 +12,7 @@ using StackChanNetBoard = WifiBoard;
 #include "display/lcd_display.h"
 #include "stackchan_display.h"
 #include "application.h"
+#include "protocols/websocket_server_protocol.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "i2c_device.h"
@@ -660,6 +661,28 @@ uint8_t hal_bridge::board_get_speaker_volume()
         volume = 10;
     }
     return volume;
+}
+
+bool hal_bridge::is_host_connected()
+{
+#if CONFIG_CONNECTION_TYPE_USB_NCM
+    return WebsocketServerProtocol::IsHostConnected();
+#else
+    // Other transports dial out and are "connected" whenever the app thinks they are.
+    auto& app = Application::GetInstance();
+    return app.GetDeviceState() != kDeviceStateStarting;
+#endif
+}
+
+const char* hal_bridge::transport_label()
+{
+#if CONFIG_CONNECTION_TYPE_USB_NCM
+    return "USB";
+#elif CONFIG_CONNECTION_TYPE_USB_SLIP
+    return "USB";
+#else
+    return "NET";
+#endif
 }
 
 void hal_bridge::toggle_xiaozhi_chat_state()

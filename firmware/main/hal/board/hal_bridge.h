@@ -55,6 +55,15 @@ void xiaozhi_board_init();
 void start_xiaozhi_app();
 bool is_xiaozhi_ready();
 bool is_xiaozhi_idle();
+
+// Is a host currently connected over the active transport? Used by the LED and the
+// connection badge, so both read the same source of truth rather than each keeping
+// their own idea of "connected" and drifting apart.
+bool is_host_connected();
+
+// Short name of the transport this build listens on: "USB", "WiFi", ... Shown on the
+// badge, so it answers "not connected *to what*" without needing a serial log.
+const char* transport_label();
 XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 
