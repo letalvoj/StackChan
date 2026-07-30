@@ -27,10 +27,24 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "clients"))
 
 from audio_codec import for_format  # noqa: E402
+from gemini_live import Downsampler  # noqa: E402
 
 SRC_RATE = 24000          # what Gemini Live emits
 DEV_RATE = 16000          # what the device negotiated
 FRAME_MS = 60
+
+
+def resampler():
+    """A fresh resampler, adapted to the (pcm, src, dst) shape these tests pass around.
+
+    Fresh per stream, and never shared: the shipping resampler is an FIR filter with
+    memory (Downsampler), so reusing one across two independent signals would leak the
+    tail of the first into the head of the second. That statefulness is the point --
+    it is what removes the discontinuity at every chunk boundary -- but it makes a
+    module-level singleton wrong for tests.
+    """
+    down = Downsampler(SRC_RATE, DEV_RATE)
+    return lambda pcm, src=SRC_RATE, dst=DEV_RATE: down.feed(pcm)
 
 
 def tone(seconds=3.0, freq=440.0, rate=SRC_RATE):
@@ -92,7 +106,7 @@ def stream_with_residual(chunks, codec, resample):
 
 def test_per_chunk_encoding_injects_silence():
     """The bug itself. If this ever stops failing, the padding behaviour changed."""
-    from gemini_live import resample
+    resample = resampler()
 
     codec = for_format("pcm", DEV_RATE, FRAME_MS)     # lossless, so the count is exact
     chunks = ragged_chunks(tone())
@@ -112,23 +126,19 @@ def test_per_chunk_encoding_injects_silence():
 
 def test_residual_streaming_injects_no_silence():
     """The fix. A continuous tone must stay continuous however it is chunked."""
-    from gemini_live import resample
-
     codec = for_format("pcm", DEV_RATE, FRAME_MS)
-    decoded = stream_with_residual(ragged_chunks(tone()), codec, resample)
+    decoded = stream_with_residual(ragged_chunks(tone()), codec, resampler())
 
     assert silence_samples(decoded) == 0
 
 
 def test_residual_streaming_preserves_length():
     """No samples invented, none lost -- within one frame of the resampled original."""
-    from gemini_live import resample
-
     codec = for_format("pcm", DEV_RATE, FRAME_MS)
     src = tone(seconds=2.0)
-    decoded = stream_with_residual(ragged_chunks(src), codec, resample)
+    decoded = stream_with_residual(ragged_chunks(src), codec, resampler())
 
-    expected = len(resample(src, SRC_RATE, DEV_RATE)) // 2
+    expected = len(resampler()(src)) // 2
     got = len(decoded) // 2
     assert abs(got - expected) <= codec.samples_per_frame
 
@@ -136,8 +146,6 @@ def test_residual_streaming_preserves_length():
 @pytest.mark.parametrize("frame_ms", [20, 40, 60])
 def test_holds_for_every_frame_duration(frame_ms):
     """The device picks frame_duration in its hello; the fix must not assume 60 ms."""
-    from gemini_live import resample
-
     codec = for_format("pcm", DEV_RATE, frame_ms)
-    decoded = stream_with_residual(ragged_chunks(tone(seconds=1.5)), codec, resample)
+    decoded = stream_with_residual(ragged_chunks(tone(seconds=1.5)), codec, resampler())
     assert silence_samples(decoded) == 0

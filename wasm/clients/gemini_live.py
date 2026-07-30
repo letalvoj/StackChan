@@ -31,8 +31,10 @@ import asyncio
 import base64
 import binascii
 import json
+import math
 import os
 import random
+import struct
 import sys
 import time
 import uuid
@@ -69,6 +71,16 @@ PREROLL_FRAMES = 4
 # device's VAD says someone is speaking.
 VIDEO_POLL_S = 1.0
 
+# Playback level. Gemini's TTS is mastered close to full scale, and the CoreS3 drives a
+# 1 W speaker in a plastic head -- so the last few dB before the rails are where the
+# analog side starts buzzing, which reads as "too loud" rather than as distortion.
+# Anything above SOFT_KNEE gets rounded off instead of sheared flat; see
+# Downsampler._to_pcm. Turn OUTPUT_GAIN down if the speaker itself is being overdriven,
+# which digital headroom cannot fix.
+FULL_SCALE = 32767.0
+SOFT_KNEE = FULL_SCALE * 0.80
+OUTPUT_GAIN = 1.0               # overridden from env in main()
+
 
 # --------------------------------------------------------------------------- env
 
@@ -94,31 +106,132 @@ def load_env(root: Path) -> None:
 
 # ---------------------------------------------------------------------- resample
 
-def resample(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Linear-interpolating resampler over PCM16 mono.
+def _lowpass(taps: int, fs: float, fc: float) -> list[float]:
+    """Windowed-sinc low pass, Hamming, normalised to unity DC gain."""
+    d = (taps - 1) / 2
+    h = []
+    for i in range(taps):
+        m = i - d
+        x = 2 * fc / fs
+        v = x * (1.0 if m == 0 else math.sin(math.pi * x * m) / (math.pi * x * m))
+        v *= 0.54 - 0.46 * math.cos(2 * math.pi * i / (taps - 1))
+        h.append(v)
+    s = sum(h)
+    return [v / s for v in h]
 
-    Hand-rolled because `audioop` was removed in Python 3.13 and pulling numpy or
-    soxr in for one downsample is not worth the install. Linear interpolation
-    aliases above Nyquist, which for 24k -> 16k speech is inaudible next to Opus
-    at this bitrate; revisit if the ratio ever gets aggressive.
+
+class Downsampler:
+    """24 kHz Gemini audio -> 16 kHz device audio, without the aliasing.
+
+    THE PREVIOUS VERSION OF THIS WAS THE SECOND AUDIO BUG, and it sounded nothing
+    like the first one. Linear interpolation is not a resampler, it is an
+    interpolator with no anti-alias filter at all: everything above the output's
+    8 kHz Nyquist folds straight back down into the voice band. Measured, feeding
+    pure tones through both paths and reading the level at the fold frequency:
+
+        input 24k    lands at    linear      this
+          9000 Hz      7000 Hz    72.4 dB    15.2 dB
+         10000 Hz      6000 Hz    71.5 dB    11.6 dB
+         11000 Hz      5000 Hz    70.6 dB    15.5 dB
+
+    A 10 kHz tone arrived at 6 kHz essentially undiminished -- a full-strength ghost
+    at the wrong pitch. Speech from a 24 kHz TTS has real energy up there in every
+    "s", "sh" and "t", so every sibilant was dumping an inharmonic buzz into the
+    middle of the voice. That is the "cracking AM radio" quality: it rides on the
+    voice rather than punctuating it, which is what makes it sound different from the
+    frame-boundary clicks fixed earlier (see enqueue_audio).
+
+    Done properly: upsample by 2, low-pass, decimate by 3. Polyphase, so the zero
+    samples are never actually multiplied -- 2.3 ms per 60 ms frame, in a worker
+    thread. 81 taps at 7.3 kHz keeps the passband flat to 7 kHz and puts the stop
+    band 60 dB down.
+
+    Stateful on purpose. The filter history carries across blocks, so there is no
+    discontinuity at chunk boundaries -- which would be a new click in place of the
+    old one.
     """
-    if src_rate == dst_rate or not pcm:
-        return pcm
 
-    src = memoryview(pcm).cast("h")
-    n_out = int(len(src) * dst_rate / src_rate)
-    step = len(src) / n_out if n_out else 0
-    out = bytearray(n_out * 2)
-    view = memoryview(out).cast("h")
-    for i in range(n_out):
-        pos = i * step
-        j = int(pos)
-        if j + 1 < len(src):
-            frac = pos - j
-            view[i] = int(src[j] * (1.0 - frac) + src[j + 1] * frac)
-        else:
-            view[i] = src[j] if j < len(src) else 0
-    return bytes(out)
+    L, M = 2, 3          # 24000 * 2 / 3 = 16000
+    TAPS, CUTOFF = 81, 7300.0
+
+    def __init__(self, src_rate: int, dst_rate: int):
+        if src_rate * self.L != dst_rate * self.M:
+            raise ValueError(f"{src_rate}->{dst_rate} is not the 3:2 ratio this "
+                             f"resampler implements")
+        # Gain L compensates the zero stuffing of the upsample.
+        self.h = [v * self.L for v in _lowpass(self.TAPS, src_rate * self.L, self.CUTOFF)]
+        self.peak = 0                 # |sample| high-water mark, for headroom checks
+        self.clipped = 0              # samples the limiter had to round off
+        self.reset()
+
+    def reset(self):
+        """Forget the filter history, at a real discontinuity such as a barge-in.
+
+        Level statistics deliberately survive: they describe the speaker, not the
+        stream, and zeroing them on every interrupt would hide exactly the loud turns
+        worth knowing about.
+        """
+        self.buf: list[int] = []      # buf[0] is absolute input index self.base
+        self.base = 0
+        self.n_in = 0
+        self.n_out = 0
+
+    def take_levels(self) -> tuple[float, int]:
+        """Peak as a fraction of full scale, and how many samples were limited."""
+        peak, clipped = self.peak / FULL_SCALE, self.clipped
+        self.peak = self.clipped = 0
+        return peak, clipped
+
+    def feed(self, pcm: bytes) -> bytes:
+        """One block in, whole samples out. 1440 in -> exactly 960 out, always."""
+        self.buf.extend(memoryview(pcm).cast("h"))
+        self.n_in += len(pcm) // 2
+        h, taps, out = self.h, self.TAPS, []
+
+        while True:
+            k0 = self.M * self.n_out          # index into the virtual 48 kHz signal
+            if k0 // self.L > self.n_in - 1:
+                break
+            # u[k] = x[k/2] for even k and 0 otherwise, so only the taps whose parity
+            # matches k0 can contribute -- half the multiplies, exactly.
+            acc = 0.0
+            t = k0 % self.L
+            while t < taps:
+                xi = (k0 - t) // self.L
+                if xi < self.base:
+                    break                     # start-up: missing history is silence
+                acc += h[t] * self.buf[xi - self.base]
+                t += self.L
+            out.append(acc)
+            self.n_out += 1
+
+        # Retain only the history future outputs still need.
+        need = (self.M * self.n_out - taps + 1) // self.L
+        if need > self.base:
+            del self.buf[:need - self.base]
+            self.base = need
+
+        return self._to_pcm(out)
+
+    def _to_pcm(self, samples: list[float]) -> bytes:
+        """Gain, soft limit, clamp -- and keep score."""
+        gain, out = OUTPUT_GAIN, []
+        for v in samples:
+            v *= gain
+            a = abs(v)
+            if a > self.peak:
+                self.peak = int(a)
+            if a > SOFT_KNEE:
+                # Round the top off rather than shearing it. A hard clamp turns a
+                # loud vowel into a square wave, which is broadband buzz -- the
+                # digital half of "too loud". tanh is expensive and only the few
+                # samples that are actually near the rails ever reach it.
+                over = (a - SOFT_KNEE) / (FULL_SCALE - SOFT_KNEE)
+                a = SOFT_KNEE + (FULL_SCALE - SOFT_KNEE) * math.tanh(over)
+                v = a if v > 0 else -a
+                self.clipped += 1
+            out.append(int(v))
+        return struct.pack(f"<{len(out)}h", *out)
 
 
 # ------------------------------------------------------------------------- tools
@@ -287,6 +400,16 @@ TOOLS = [
 ]
 
 
+def grounding_enabled() -> bool:
+    """Google Search grounding, on unless explicitly switched off.
+
+    Read at call time rather than at import: load_env() runs inside main(), so a
+    module-level constant would be decided before .env.local has been read.
+    """
+    return os.environ.get("GEMINI_API_SEARCH_GROUNDING", "1").lower() not in (
+        "0", "false", "no", "off", "")
+
+
 def tools_for(video_streaming: bool):
     """The tool set, minus take_photo when frames are already streaming.
 
@@ -298,9 +421,24 @@ def tools_for(video_streaming: bool):
     now"; a description asking it not to call the tool would just be a suggestion.
     """
     if not video_streaming:
-        return TOOLS
-    kept = [f for f in TOOLS[0].function_declarations if f.name != "take_photo"]
-    return [types.Tool(function_declarations=kept)]
+        tools = list(TOOLS)
+    else:
+        kept = [f for f in TOOLS[0].function_declarations if f.name != "take_photo"]
+        tools = [types.Tool(function_declarations=kept)]
+
+    # Search grounding rides alongside the device tools rather than replacing them --
+    # the Live API takes a list, and the model picks per turn. It is a separate Tool
+    # entry because it is not a function declaration: the search runs server-side and
+    # nothing comes back through handle_tool_call.
+    #
+    # Default on. The failure it prevents is the one that actually happens on a desk
+    # robot: someone asks the time, the weather, or who won last night, and a model
+    # with a training cutoff answers confidently and wrongly. Being able to say "I do
+    # not know, let me check" is worth more here than the latency it costs, and the
+    # cost lands only on turns where the model chooses to search.
+    if grounding_enabled():
+        tools.append(types.Tool(google_search=types.GoogleSearch()))
+    return tools
 
 
 # Gemini's flat tool names -> the device's namespaced MCP names.
@@ -346,6 +484,9 @@ class Device:
         # Leftover source-rate PCM that did not fill a whole device frame. Carried across
         # chunks; see enqueue_audio for why this matters more than anything else here.
         self._pcm_residual = b""
+        # Built once the codec is known (its rate is what we resample TO). Stateful, so
+        # it belongs to the connection rather than to a call.
+        self._down = None
         # A JPEG waiting to be sent as its own turn, once the tool call that produced
         # it has been answered. See handle_tool_call.
         self.pending_photo = None
@@ -364,6 +505,19 @@ class Device:
         self.video_session = False
         # Device-side VAD, forwarded over the protocol. Camera streaming is gated on it.
         self.voice_active = False
+        # Barge-in latch. Set when the user taps the face while the robot is speaking;
+        # cleared when the abandoned turn finally ends server-side. While set, audio
+        # arriving from Gemini is dropped on the floor instead of queued -- see
+        # enqueue_audio. Without it, clearing the queue only buys a moment of quiet
+        # before the rest of the generated turn refills it.
+        self.barged_in = False
+        # Set while pace() has a tts:start outstanding, so a barge-in knows whether
+        # there is anything to interrupt. Read from the pump, written by pace().
+        self.speaking = False
+        # Barge-ins observed by the pump, for the session task to report upstream. The
+        # pump handles the local half itself (that is the half with a latency budget)
+        # and must never block on the model.
+        self.aborts = asyncio.Queue()
 
     async def connect(self):
         # ping_interval/ping_timeout are the half-open detector. When an SSH tunnel dies
@@ -382,6 +536,7 @@ class Device:
         # rather than assuming, so a firmware change to either cannot desync us.
         self.codec = codec_from_hello({"audio_params": {
             "format": "opus", "sample_rate": GEMINI_SEND_RATE, "frame_duration": 60}})
+        self._down = Downsampler(GEMINI_RECEIVE_RATE, self.codec.sample_rate)
         return self
 
     async def pump(self):
@@ -415,6 +570,16 @@ class Device:
                 elif data.get("state") == "stop":
                     self.listening.clear()
                     self.voice_active = False
+            elif kind == "abort":
+                # The device interrupting ITSELF, on a face tap while speaking.
+                # application.cc: HandleStartListening -> AbortSpeaking -> this frame.
+                # It already stopped its own playback locally; if we ignore the frame we
+                # keep streaming a turn nobody is listening to, and the queued frames go
+                # on arriving for as long as the model keeps generating. That is exactly
+                # "we have to wait for the whole thing to finish".
+                await self.barge_in()
+                self.aborts.put_nowait(data.get("reason") or "user")
+                print("  ✋ interrupted", flush=True)
             elif kind == "sensor":
                 # Something physical happened TO the robot -- petted, shaken. Queued for
                 # the session task to fold into context; the pump must not block on the
@@ -522,6 +687,13 @@ class Device:
         they run in a worker thread; inline they stall the event loop the microphone
         uplink shares, which made the choppiness bidirectional.
         """
+        # Interrupted: the model is still delivering a turn the user has already
+        # dismissed. Drop it rather than queue it. Cleared by the server telling us the
+        # turn is genuinely over (downlink), which is the only moment it is safe to
+        # start playing again -- clearing on the next chunk would just resume it.
+        if self.barged_in:
+            return
+
         self._pcm_residual += pcm24
         step = self._src_bytes_per_frame()
         n = len(self._pcm_residual) // step
@@ -530,7 +702,7 @@ class Device:
         whole, self._pcm_residual = self._pcm_residual[:n * step], self._pcm_residual[n * step:]
 
         def work():
-            pcm = resample(whole, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
+            pcm = self._down.feed(whole)
             return self.codec.encode(pcm)
 
         for frame in await asyncio.to_thread(work):
@@ -543,7 +715,7 @@ class Device:
         tail, self._pcm_residual = self._pcm_residual, b""
 
         def work():
-            pcm = resample(tail, GEMINI_RECEIVE_RATE, self.codec.sample_rate)
+            pcm = self._down.feed(tail)
             return self.codec.encode(pcm)
 
         for frame in await asyncio.to_thread(work):
@@ -558,7 +730,9 @@ class Device:
         pass keeps encode/send cost from accumulating into drift.
         """
         period = self.codec.frame_ms / 1000.0
-        speaking = False
+        # On the instance, not a local: the pump reads it to decide whether a face tap
+        # is a barge-in or just the start of a turn.
+        self.speaking = False
         deadline = None
         while True:
             # Pre-roll before the first frame of a turn. The device plays in hard real
@@ -566,7 +740,7 @@ class Device:
             # Gemini delivers in bursts, and starting on the very first frame means the
             # first network hiccup is audible. kPreroll frames of head start costs that
             # much latency once per turn and absorbs the jitter for the rest of it.
-            if not speaking and self.tx.qsize() < PREROLL_FRAMES:
+            if not self.speaking and self.tx.qsize() < PREROLL_FRAMES:
                 try:
                     await asyncio.wait_for(asyncio.shield(self._preroll_wait()), timeout=0.4)
                 except asyncio.TimeoutError:
@@ -575,18 +749,28 @@ class Device:
             frame = await self.tx.get()
 
             if frame is None:                     # end-of-turn marker
-                if speaking:
+                if self.speaking:
                     await self.ws.send(json.dumps({"session_id": self.session_id,
                                                    "type": "tts", "state": "stop"}))
-                    speaking = False
+                    self.speaking = False
+                    # Headroom report, once per turn. Distortion is hard to attribute
+                    # by ear -- digital clipping, an overdriven speaker and aliasing
+                    # all sound "crackly" -- so print the one number that separates
+                    # them. A peak below 1.0 with nothing limited means the level is
+                    # innocent and the buzz is somewhere else.
+                    if self._down is not None:
+                        peak, clipped = self._down.take_levels()
+                        if peak:
+                            note = f" ⚠ {clipped} limited" if clipped else ""
+                            print(f"  🔊 peak {peak:.2f} FS{note}", flush=True)
                 deadline = None
                 continue
 
-            if not speaking:
+            if not self.speaking:
                 await self.ws.send(json.dumps({
                     "session_id": self.session_id, "type": "tts", "state": "start",
                     "sample_rate": self.codec.sample_rate}))
-                speaking = True
+                self.speaking = True
                 deadline = asyncio.get_running_loop().time()
 
             await self.ws.send(frame)
@@ -605,6 +789,31 @@ class Device:
 
     async def end_turn(self):
         await self.flush_audio()
+        await self.tx.put(None)
+
+    async def barge_in(self):
+        """Stop talking NOW, and stay stopped until the abandoned turn really ends.
+
+        Three things have to happen together or the interrupt is only cosmetic:
+
+        1. Throw away what is queued but unsent. Up to a couple of seconds of speech
+           can be sitting in `tx` -- that is the pre-roll and pacing working as
+           designed, and it is exactly what would otherwise keep playing after the tap.
+        2. Close the turn on the device, so it leaves `speaking` and the avatar's mouth
+           stops. Done by pushing the existing end-of-turn marker rather than sending
+           `tts stop` from here: pace() owns that message, and two writers racing on it
+           is how you get a device stuck mid-utterance.
+        3. Latch `barged_in`. Gemini has already generated the rest of the turn and will
+           keep delivering it for seconds after the tap. Without the latch, step 1 buys
+           a fraction of a second of silence and then the robot carries on talking --
+           which looks *more* broken than not interrupting at all.
+        """
+        if not self.speaking and self.tx.empty():
+            return
+        self.barged_in = True
+        self.drop_pending_audio()
+        if self._down is not None:
+            self._down.reset()
         await self.tx.put(None)
 
     def drop_pending_audio(self):
@@ -726,13 +935,31 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
 async def converse(device: Device, session):
     """Bridge one live session: mic up, audio down, tool calls across."""
 
-    async def sensor_uplink():
-        """Fold physical events into context WITHOUT forcing a reply.
+    async def abort_uplink():
+        """Tell the model the turn was dismissed. The local half already happened.
 
-        turn_complete=False is the whole point. Being petted should colour what the robot
-        says next, not interrupt whatever is happening to announce that it was petted -- a
-        robot that says "you touched me!" every single time is a car alarm. The note lands
-        in context, and the model can mention it, or not, when it next speaks naturally.
+        Split deliberately: the pump stops playback the instant the frame arrives,
+        because that is the half with a latency budget a human can feel. This half is
+        bookkeeping and can take as long as the network takes.
+
+        It matters for two reasons even though the robot is already quiet. Gemini keeps
+        generating a turn nobody is listening to, which costs tokens and delays the next
+        one; and left unsaid, the model believes it delivered the whole utterance and
+        will reference things the user never heard. Realtime input interrupts the
+        current generation, so this both stops it and explains why.
+        """
+        while True:
+            await device.aborts.get()
+            try:
+                await session.send_realtime_input(
+                    text="[SENSOR] The person just cut you off mid-sentence -- they "
+                         "tapped your face to stop you talking. Stop where you are. "
+                         "They did not hear the rest, so do not refer back to it.")
+            except Exception as exc:
+                print(f"  ⚠ interrupt not delivered: {type(exc).__name__}", flush=True)
+
+    async def sensor_uplink():
+        """Fold physical events into context, and answer them when nothing else is going on.
 
         PHRASING MATTERS MORE THAN IT LOOKS. These arrive as role="user" content, which is
         the only channel available mid-session -- so anything in the third person ("someone
@@ -742,6 +969,24 @@ async def converse(device: Device, session):
         So: second person, present tense, addressed to the model as its own sensation, and
         tagged [SENSOR] so it is unmistakably instrumentation rather than speech. The system
         instruction explains the tag; the two have to agree or the tag is just noise.
+
+        TWO CASES, AND THE ORIGINAL VERSION ONLY HANDLED ONE.
+
+        Mid-conversation, turn_complete=False is right: being petted should colour what
+        the robot says next, not interrupt to announce itself. A robot that says "you
+        touched me!" over the top of the person talking is a car alarm.
+
+        But in SILENCE that same choice means nothing happens at all. The note sits in
+        context waiting for a turn that only arrives when the person speaks -- so petting
+        the robot appeared to do nothing, and then every pat that had accumulated landed
+        at once and muddled a reply about something else entirely. Touch with no response
+        is not subtlety, it is a broken button.
+
+        So when the robot is quiet and nobody is speaking, close the turn and let it
+        react. Guarded three ways, because the fix is only an improvement if it stays
+        rare: events are coalesced over a short window (a stroke is many events, not
+        many touches), a cooldown stops continuous petting turning into a monologue, and
+        anything arriving mid-turn still uses the quiet path.
         """
         NOTE = {
             "head_pet": "[SENSOR] Someone is stroking the top of your head right now. "
@@ -749,16 +994,50 @@ async def converse(device: Device, session):
             "shaken": "[SENSOR] You have just been picked up and shaken about. "
                       "Everything is still wobbling.",
         }
+        # A single stroke fires repeatedly. Gather what arrives in this window and treat
+        # it as one touch, otherwise "coalescing" is just a different word for spam.
+        COALESCE_S = 1.2
+        # Minimum gap between two touch-triggered replies. Long enough that a child
+        # rubbing the robot's head continuously gets one reaction, then a listener.
+        COOLDOWN_S = 20.0
+        last_reply = 0.0
+
         while True:
             ev = await device.sensor_events.get()
-            note = NOTE.get(ev)
-            if note is None:
+            seen = {ev}
+            deadline = asyncio.get_running_loop().time() + COALESCE_S
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    seen.add(await asyncio.wait_for(
+                        device.sensor_events.get(), timeout=remaining))
+                except asyncio.TimeoutError:
+                    break
+
+            notes = [NOTE[e] for e in ("shaken", "head_pet") if e in seen and e in NOTE]
+            if not notes:
                 continue
+
+            # Quiet means: not mid-utterance, nothing queued to play, and the person is
+            # not currently talking. Anything else and a forced turn would talk over
+            # somebody.
+            quiet = (not device.speaking and device.tx.empty()
+                     and not device.voice_active and not device.barged_in)
+            now = asyncio.get_running_loop().time()
+            answer = quiet and (now - last_reply) > COOLDOWN_S
+            if answer:
+                last_reply = now
+
             try:
                 await session.send_client_content(
-                    turns=types.Content(role="user", parts=[types.Part(text=note)]),
-                    turn_complete=False,
+                    turns=types.Content(role="user",
+                                        parts=[types.Part(text=" ".join(notes))]),
+                    turn_complete=answer,
                 )
+                if answer:
+                    print("  ✋ → answering the touch", flush=True)
             except Exception as exc:
                 print(f"  ⚠ sensor note dropped: {type(exc).__name__}", flush=True)
 
@@ -828,6 +1107,12 @@ async def converse(device: Device, session):
                           f"will resume", flush=True)
 
                 server = response.server_content
+                if server and (server.interrupted or server.turn_complete):
+                    # The abandoned turn is finally over server-side. This is the only
+                    # safe place to unlatch: any earlier and the tail of the very turn
+                    # the user dismissed starts playing again.
+                    device.barged_in = False
+
                 if server and server.interrupted:
                     # Barge-in: drop what has not gone out yet and close the turn.
                     device.drop_pending_audio()
@@ -884,7 +1169,7 @@ async def converse(device: Device, session):
     done, pending = await asyncio.wait(
         [asyncio.create_task(t) for t in
          (uplink(), downlink(), device.pace(), video_uplink(),
-          sensor_uplink(), watch_mode())],
+          sensor_uplink(), abort_uplink(), watch_mode())],
         return_when=asyncio.FIRST_COMPLETED,
     )
     for t in pending:
@@ -905,6 +1190,14 @@ async def main():
     ap.add_argument("--voice", default=os.environ.get("GEMINI_VOICE", "Charon"))
     args = ap.parse_args()
 
+    # Module-level because the resampler reads it per sample and an attribute lookup
+    # per sample is not free in pure Python. Set once, before any audio flows.
+    global OUTPUT_GAIN
+    try:
+        OUTPUT_GAIN = float(os.environ.get("GEMINI_API_OUTPUT_GAIN", "1.0"))
+    except ValueError:
+        sys.exit("GEMINI_API_OUTPUT_GAIN must be a number, e.g. 0.8")
+
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("GEMINI_API_KEY is not set. Put it in .env.local (see .env).")
@@ -915,7 +1208,10 @@ async def main():
         speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
             prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=args.voice))),
         system_instruction=os.environ.get("STACKCHAN_SYSTEM_PROMPT"),
-        tools=TOOLS,
+        # Not TOOLS: the initial session must agree with what watch_mode() rebuilds on
+        # every mode change, or grounding would silently appear only after the first
+        # camera-button press.
+        tools=tools_for(False),
     )
 
     url = f"ws://{args.host}:{args.port}/ws"
@@ -1008,7 +1304,8 @@ async def run_link(device, client, config, args):
                                                        config=attempt) as session:
                         print(f"▶ Gemini Live session {'resumed' if resumed else 'open'}"
                               f" ({args.model}, voice {args.voice}"
-                              f"{', camera streaming' if device.video_session else ''})",
+                              f"{', camera streaming' if device.video_session else ''}"
+                              f"{', search grounding' if grounding_enabled() else ''})",
                               flush=True)
                         await converse(device, session)
                 except asyncio.CancelledError:
