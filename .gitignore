@@ -1,5 +1,12 @@
 .DS_Store
 .idea/
+
+# facelab compiles the real avatar skin natively and renders contact sheets. Every
+# byte under build/ and out/ is regenerable with ./build.sh && ./grid.sh -- object
+# files, the linked binary, a whole vendored LVGL build, and the PNGs themselves.
+# 518 of them were tracked, so a one-line face tweak produced a 500-file diff.
+tools/facelab/build/
+tools/facelab/out/
 test_assets/
 wasm/build_wasm/
 __pycache__/
