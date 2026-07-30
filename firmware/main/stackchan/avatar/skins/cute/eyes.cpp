@@ -12,18 +12,21 @@ using namespace stackchan::avatar;
 // Big eyes, set fairly wide and slightly above centre. Eye size is the single strongest
 // lever on "cute" -- the default skin's 16px discs read as instrumentation, these read as
 // a character.
-static const int _eye_diameter        = 46;
-static const int _pupil_diameter      = 13;
-static const Vector2i _eye_pos        = Vector2i(-52, -14);
-static const Vector2i _eye_min_offset = Vector2i(-14, -14);
-static const Vector2i _eye_max_offset = Vector2i(14, 14);
+//
+// All 1.2x their original values: the face frame is gone (see cute.cpp) and the features
+// grew to take back the ring it occupied.
+static const int _eye_diameter        = 55;
+static const int _pupil_diameter      = 16;
+static const Vector2i _eye_pos        = Vector2i(-62, -17);
+static const Vector2i _eye_min_offset = Vector2i(-17, -17);
+static const Vector2i _eye_max_offset = Vector2i(17, 17);
 
 // The pupil sits low and toward the nose. Centred pupils stare; offset pupils look at
 // something, and the reference image does exactly this.
-static const Vector2i _pupil_offset = Vector2i(3, 5);
+static const Vector2i _pupil_offset = Vector2i(4, 6);
 
 // Pixels of eye left visible when the lid is fully down -- the closed-eye line.
-static const int kClosedSliver = 5;
+static const int kClosedSliver = 6;
 
 CuteEyes::CuteEyes(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t secondaryColor, bool isLeftEye)
 {
@@ -126,7 +129,7 @@ void CuteEyes::setSize(int size)
 {
     Feature::setSize(size);
 
-    const int d = uitk::clamp(_eye_diameter + map_range(_size, -100, 100, -16, 16), 8, 80);
+    const int d = uitk::clamp(_eye_diameter + map_range(_size, -100, 100, -19, 19), 8, 96);
     _eye->setSize(d, d);
 }
 

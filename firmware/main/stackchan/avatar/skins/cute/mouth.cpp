@@ -11,12 +11,15 @@ using namespace stackchan::avatar;
 
 // Higher and smaller than the first pass. A mouth low on the face reads adult and a
 // bit glum; lifting it and shrinking it is most of what makes a face read as babyish.
-static const Vector2i _mouth_pos        = Vector2i(0, 28);
-static const Vector2i _mouth_min_offset = Vector2i(-12, -12);
-static const Vector2i _mouth_max_offset = Vector2i(12, 12);
+//
+// All 1.2x their original values, matching eyes.cpp -- the face frame is gone (see
+// cute.cpp) and the features grew to take back the ring it occupied.
+static const Vector2i _mouth_pos        = Vector2i(0, 34);
+static const Vector2i _mouth_min_offset = Vector2i(-14, -14);
+static const Vector2i _mouth_max_offset = Vector2i(14, 14);
 
-static const int _smile_size   = 58;    // bounding box of the arc
-static const int _smile_width  = 7;     // stroke thickness
+static const int _smile_size   = 70;    // bounding box of the arc
+static const int _smile_width  = 8;     // stroke thickness
 
 // Handoff band: the smile holds until the mouth is clearly opening, then swaps quickly.
 // Narrow band on purpose. Any frame that lands mid-fade shows two half-opaque shapes
@@ -28,8 +31,8 @@ static const int kSwap      = 19;
 
 // Quiet speech should be a small movement, and a wide-open mouth is TALLER than it is
 // wide -- widening it instead just looks like a grimace.
-static const Vector2i _open_min_size = Vector2i(14, 5);
-static const Vector2i _open_max_size = Vector2i(54, 60);
+static const Vector2i _open_min_size = Vector2i(17, 6);
+static const Vector2i _open_max_size = Vector2i(65, 72);
 
 CuteMouth::CuteMouth(lv_obj_t* parent, lv_color_t primaryColor, lv_color_t secondaryColor)
 {

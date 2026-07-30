@@ -14,7 +14,7 @@
 namespace stackchan::avatar {
 
 /**
- * @brief "Cute" skin: glowing rounded-square face, big round eyes, curved smile, blush.
+ * @brief "Cute" skin: big round eyes, curved smile, blush. No frame -- see cute.cpp.
  *
  * Implements the same Feature contract as DefaultAvatar, so every existing modifier
  * (blink, breath, speaking, head-pet, IMU) drives it unchanged -- none of them know or
@@ -23,8 +23,8 @@ namespace stackchan::avatar {
  * Two things differ structurally from the default skin, both chosen to stay inside the
  * partial-redraw budget (see AVATAR.md 6):
  *
- *   * The face frame and blush are STATIC. They are drawn once and never marked dirty,
- *     so they cost nothing per frame no matter how elaborate they look.
+ *   * The blush is STATIC. It is drawn once and never marked dirty, so it costs nothing
+ *     per frame no matter how elaborate it looks.
  *   * The mouth cross-fades between a smile arc and an open ellipse rather than morphing
  *     one shape. LVGL cannot animate a path, but it can fade two small overlapping
  *     objects, and only their bounding box is redrawn.
@@ -40,7 +40,6 @@ public:
 
 private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _pannel;
-    std::unique_ptr<uitk::lvgl_cpp::Container> _frame;
     std::unique_ptr<uitk::lvgl_cpp::Container> _blush_l;
     std::unique_ptr<uitk::lvgl_cpp::Container> _blush_r;
 };
