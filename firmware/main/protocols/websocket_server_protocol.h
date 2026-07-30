@@ -53,6 +53,25 @@ public:
         return instance_ != nullptr && instance_->HasClient();
     }
 
+protected:
+    // Upstream declares any channel dead after 120 s without an inbound frame, and
+    // IsAudioChannelOpened() is gated on it. That rule belongs to the CLIENT role: when
+    // the device dials out to a cloud server, silence really does mean the session died.
+    //
+    // Inverted here, it is a bug with a nasty shape. The device is the server; a
+    // connected agent that is simply waiting for someone to tap the robot sends
+    // NOTHING, legitimately, for hours. httpd answers pings itself
+    // (handle_ws_control_frames is false), so they never refresh last_incoming_time_
+    // either -- see the keepalive note in Start(). After two quiet minutes the channel
+    // is declared timed out, IsAudioChannelOpened() returns false forever, and a face
+    // tap can no longer open the microphone. The robot lights up green and hears
+    // nothing, which looks exactly like broken audio and is not.
+    //
+    // Liveness is already handled, and handled better, at the TCP layer: keepalive
+    // probes reap a genuinely dead peer in ~35 s without punishing a healthy quiet one.
+    // So this returns false and lets that mechanism own the question.
+    bool IsTimeout() const override { return false; }
+
 private:
     httpd_handle_t server_ = nullptr;
     EventGroupHandle_t event_group_ = nullptr;

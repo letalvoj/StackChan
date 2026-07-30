@@ -610,6 +610,8 @@ void WebsocketServerProtocol::CloseAudioChannel(bool send_goodbye) {
 }
 
 bool WebsocketServerProtocol::IsAudioChannelOpened() const {
+    // IsTimeout() is overridden to false for this transport -- see the header. Kept in
+    // the expression so this line still matches every other protocol implementation.
     return client_fd_.load() >= 0 && audio_channel_opened_ && !error_occurred_ && !IsTimeout();
 }
 

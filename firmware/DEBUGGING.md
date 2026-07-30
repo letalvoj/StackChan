@@ -122,6 +122,8 @@ Each of these presented as something else entirely.
 | A new on-screen widget kills taps or gestures | LVGL objects are **clickable by default**. Anything added to `lv_layer_top()` or over the avatar panel swallows input — `lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE)` |
 | Boot hangs at "Logging in…" | LVGL touched from the app task without `DisplayLockGuard`. LVGL is not thread-safe; use an `lv_timer` if the work belongs in LVGL's own context |
 | Streamed camera frames are one step stale | V4L2 returns the **oldest** queued buffer. `CaptureFresh()` discards the queue first; plain `StreamCaptures()` does not |
+| Tap goes green, robot hears nothing, `audio_channel_open:false`, log spams `Channel timeout N seconds` | Upstream declares a channel dead after 120 s with no inbound frame, and `IsAudioChannelOpened()` is gated on it. That rule is for the client role; here the device is the server and an idle agent legitimately sends nothing for hours. `frames_rx:1` (just the `hello`) is the tell. Fixed by overriding `IsTimeout()` to false — TCP keepalive already reaps dead peers |
+| Talking does nothing: `listening`, `audio_channel_open:true`, but `frames_tx` frozen | The audio pipeline did not survive a USB drop. `uptime_s` keeps counting, so the app never rebooted and everything *looks* healthy. `frames_tx` counts every send including audio — if it does not move while you talk, the mic is not reaching the wire. `/debug/reset` restores the state machine but **cannot restart the audio service**; press reset |
 | Model describes the previous photo, or answers blind | Ordering, not latency. Realtime media is ordered against the audio clock, not conversation turns — a one-shot image must go via `send_client_content` |
 
 ---
