@@ -277,6 +277,36 @@ length, which a raw byte stream does not provide -- so adopting them would not h
 removed the need for framing underneath. Making the link a network gets the mature stack
 in full instead of imitating part of it.
 
+### 5.6 The tailnet as a second road to the same server
+
+**Status: registers, does not yet carry traffic.** Off by default
+(`CONFIG_STACKCHAN_TAILSCALE_ENABLE`), and currently boot-loops when enabled — see
+TASKS.md for the live crash.
+
+MicroLink (an ESP32 Tailscale client, vendored at `components/microlink_vendor` and
+pinned in `repos.json`) brings up WiFi STA *alongside* USB-NCM rather than instead of
+it. The design point worth keeping: **this required no protocol work at all.**
+`WebsocketServerProtocol` already binds `INADDR_ANY`, so `/ws`, `/debug` and
+`/debug/reset` become reachable at the device's `100.x` tailnet address the moment the
+link is up. One server, two roads to it.
+
+That also settles the authentication question the earlier design discussion circled:
+there is nothing to add. Tailscale's own WireGuard tunnel is the authentication and the
+encryption, so the device needs no bearer tokens, no per-request checks and no second
+credential system — which is why USB stays entirely open and unauthenticated too.
+
+Two constraints this environment imposes that an emulator does not, both learned the
+hard way (details in DEBUGGING.md):
+
+* **Flash and PSRAM share the SPI bus and cache.** Any flash write disables the cache
+  PSRAM is reached through, so a task executing from a PSRAM stack — or a buffer handed
+  to a flash write API — must not be live in that window. MicroLink's four tasks were
+  moved to PSRAM stacks to survive internal-RAM fragmentation; `ml_wg_mgr` is the
+  exception and must stay internal, because it is the only one that writes NVS.
+* **Internal RAM is the scarce resource,** not total heap. With LVGL, audio and USB
+  running, the largest free *contiguous* internal block measured a stable ~7680 B —
+  enough to fail an 8 KB task stack while several megabytes sat free overall.
+
 ## 6. App model and the AI Agent trapdoor
 
 Apps are Mooncake `AppAbility` objects installed in `main.cpp`. The status bar and home
@@ -300,3 +330,116 @@ the objects would be torn down moments later and nothing would poll them. The pa
 an owner inside the Xiaozhi runtime, and there is currently no route back to the launcher
 at all. The WASM harness reproduces this faithfully (`hal_wasm.cpp`), so it is genuine
 firmware behaviour, not a harness artifact.
+
+## 7. The internal RAM budget
+
+**Internal RAM is the binding constraint on this device.** Not flash, not total heap.
+Every crash in the 2026-07-31 session traced back to this one line item, wearing four
+different disguises. Read this before adding a task, a buffer, or a network interface.
+
+### 7.1 Three budgets, only one of which is tight
+
+| Budget | Size | Free | Holds |
+|---|---:|---:|---|
+| Flash | 16 MB | ~1.4 MB | code, `.rodata`, assets, fonts, menus |
+| PSRAM | 8 MB | ~8 MB | anything not listed below |
+| **DIRAM** | **341,760 B** | **~110 KB after static** | **task stacks, DMA buffers, cache-off code** |
+
+Only the third one is scarce, and nothing else can substitute for it. This matters
+because the intuitive economies — pruning menus, dropping unused apps, trimming
+assets — all free **flash**, which is not what runs out. They buy nothing.
+
+Measured after the 2026-07-31 pruning: 230,931 B (67.6%) consumed by the static image
+before `app_main` runs, leaving ~110 KB for every task stack and driver buffer on the
+device combined. Steady-state free internal RAM sat around 18 KB, with a largest free
+*contiguous* block of ~7,680 B — which is how an 8 KB task stack request fails while
+"several megabytes free" is simultaneously true. **Track largest-contiguous-block, not
+free-bytes;** only the first one predicts allocation failures.
+
+### 7.2 PSRAM task stacks, and the rule that is not "does it write flash"
+
+Moving a task stack to PSRAM is the single biggest lever available, and MicroLink
+depends on it existing: `ml_net_io` (8 KB), `ml_derp_tx` (14 KB) and `ml_coord` (12 KB)
+are all on PSRAM stacks. That is **34 KB** that would otherwise have to come out of an
+18 KB pool. The VPN is not merely helped by this technique — it is impossible without it.
+
+Two traps, both hit for real:
+
+* `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` gates `xTaskCreateStatic` **only**. There
+  is no PSRAM fallback for dynamic `xTaskCreate`, on any IDF version. Use
+  `xTaskCreateStaticPinnedToCore` (MicroLink's `ml_task_create_psram`) or
+  `xTaskCreatePinnedToCoreWithCaps` (the app-side idiom, see `hal_imu.cpp`).
+
+* **The disqualifying test is "can this task cause a cache freeze?", NOT "does it write
+  flash?"** The narrower rule was written into a comment, believed, and boot-looped the
+  device: the `stackchan` update task touches no flash whatsoever, but drives an SPI LCD
+  with a 2 MB PSRAM image cache, and DMA coherency freezes the cache constantly. It
+  died on `assert failed: esp_cache_freeze_caches_disable_interrupts
+  (s_task_stack_is_sane_when_cache_frozen())`. ESP-IDF asserts rather than corrupting
+  silently, which is the only reason this was cheap to find.
+
+  Qualifying today: `imu`, `headtouch` (I2C sensor reads, no DMA'd framebuffer), and
+  MicroLink's three. Disqualified: `stackchan` (LCD DMA), `ml_wg_mgr` (writes NVS).
+
+### 7.3 Concessions already made, and what they cost
+
+| Decision | Δ internal | Concession |
+|---|---:|---|
+| NCM NTB buffers `3×3200` → `2×2048` both ways | **−11,024** | lower USB throughput ceiling; nowhere near saturated by audio + debug |
+| `CONFIG_LWIP_TCPIP_TASK_STACK_SIZE` `3072` → `6144` | +3,072 | necessary, not optional — see below |
+| `stackchan` task → PSRAM stack | 0 | **reverted**; violated 7.2 |
+| Disabling unused `*_IN_IRAM` driver flags | **0** | **measured worthless.** Unlinked drivers never occupied IRAM. Do not retry |
+
+**The lwIP increase was not a precaution.** With one netif, `tiT` peaked at 2,996 bytes
+against a 3,072-byte stack — **76 bytes of margin**, which presented as an intermittent
+crash a few seconds after boot and stable operation afterwards. Adding WiFi alongside
+USB-NCM put two interfaces plus DHCP and DNS on that one task. If an intermittent
+post-boot crash ever follows adding a netif, this is the first thing to check;
+`/debug` reports `tcpip_stack_free_min` precisely so it is a number and not a debate.
+
+### 7.4 What the VPN will additionally cost
+
+Enabling MicroLink adds, on top of everything above:
+
+* **~34 KB of PSRAM stacks** — free, in the sense that matters here.
+* **6 KB of internal RAM** for `ml_wg_mgr`, which cannot move (7.2). This is the
+  allocation that failed at 8 KB against a 7,680-byte largest block; it was reduced to
+  6 KB, and the ~11 KB freed since should make it comfortable. Unverified.
+* **A third netif on `tiT`'s stack.** WireGuard runs its Noise handshake — X25519,
+  blake2s HMAC with 64-byte pads, `message_handshake_initiation` at 148 B — in lwIP's
+  context. X25519 alone is typically 1–2 KB of stack. 6144 was chosen with this in
+  mind rather than sized to two interfaces; watch `tcpip_stack_free_min` when it is
+  first enabled, and expect to need 8192.
+* **ChaCha20-Poly1305 in mbedTLS**, pulled in by three `select`s in Kconfig.
+
+The honest summary: the device fits WiFi comfortably and fits the VPN only barely. That
+is the reason the VPN is parked at P2 rather than pushed through.
+
+### 7.5 USB-NCM and the tailnet should probably be mutually exclusive
+
+The current design runs the tailnet *alongside* USB-NCM, on the reasoning that USB
+stays the trusted no-setup path and the VPN is purely additive. That is the right call
+while the VPN is experimental. It is probably the wrong call once it is not.
+
+Both exist to answer the same question — *how does a host reach this device?* — and
+paying for two answers is what makes the memory budget tight:
+
+| Kept only for USB-NCM | Internal RAM |
+|---|---:|
+| NCM NTB buffers (already trimmed from 19,200) | 8,192 |
+| TinyUSB task stack | 4,096 |
+| **Total reclaimable** | **~12 KB** |
+
+That is roughly double `ml_wg_mgr`'s 6 KB — the one allocation that cannot move to
+PSRAM and the one that has actually failed. Making the transport a **choice** rather
+than a stack would turn the VPN from "fits barely" into "fits comfortably", and it
+costs nothing real: a device on a tailnet does not need a USB network adapter, and a
+device on a bench cable does not need a tailnet.
+
+It also buys back the serial console. TinyUSB is what takes over GPIO19/20 and kills
+USB-Serial-JTAG once the app runs (`firmware/DEBUGGING.md` §3); without NCM, a
+WiFi/tailnet device would keep a live console for its whole life instead of going dark
+at boot — which is the single most expensive property of the current arrangement.
+
+The natural shape is a `choice` in Kconfig alongside the existing
+`CONNECTION_TYPE_USB_NCM` / `CONNECTION_TYPE_USB_SLIP`, not a third orthogonal flag.

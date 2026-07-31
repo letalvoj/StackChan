@@ -16,11 +16,18 @@ Upstream's README follows below.
 ## Quick start
 
 ```bash
-# 1. Build and flash. Hold RST ~3s until the LED turns GREEN first (download mode),
-#    then a SHORT press after flashing -- esptool's "hard reset" does nothing here.
+# 0. One-time: the Python venv every wasm/ script expects at ./wasm/.venv
+#    (pyaudio needs portaudio: `brew install portaudio` on macOS)
+python3 -m venv wasm/.venv && wasm/.venv/bin/pip install -r wasm/requirements.txt
+
+# 1. Build and flash. TWO physical button actions are required, both unavoidable:
+#    hold RST ~3s until GREEN (download mode) BEFORE flashing, and a SHORT press
+#    after. esptool can write flash on its own but cannot start the app -- see
+#    firmware/DEBUGGING.md 3. Never hardcode the port; it varies between boots
+#    of the same device (cu.usbmodem101 and cu.usbmodem1101 both observed).
 cd firmware && source ../../esp-idf/export.sh && idf.py build
-cd build && python -m esptool --chip esp32s3 -p /dev/cu.usbmodem111101 \
-    -b 460800 --before default_reset --after hard_reset write_flash "@flash_args"
+cd build && python -m esptool --chip esp32s3 -p "$(ls /dev/cu.usbmodem* | head -1)" \
+    -b 460800 --before default_reset --after no_reset write_flash "@flash_args"
 
 # 2. Is it alive?  (safe to poll at any time, even mid-conversation)
 curl -s http://192.168.7.1:8081/debug | python3 -m json.tool
@@ -28,6 +35,14 @@ curl -s http://192.168.7.1:8081/debug | python3 -m json.tool
 # 3. Talk to it
 cp .env .env.local && $EDITOR .env.local        # add GEMINI_API_KEY
 ./wasm/.venv/bin/python wasm/clients/gemini_live.py
+```
+
+Over WiFi instead of the cable, once `CONFIG_STACKCHAN_WIFI_ENABLE` is set: `/debug`
+reports the address it got as `wifi_ip`, and every command above works against it —
+the server binds `INADDR_ANY`, so there is no second protocol and nothing to enable.
+
+```bash
+./wasm/.venv/bin/python wasm/clients/gemini_live.py --host 192.168.1.56
 ```
 
 Then **tap its face** for a voice session, or the **camera button** (bottom-right) for

@@ -6,6 +6,53 @@ Captured during architectural design sessions. Items are roughly priority-ordere
 
 ## P0 — Active / In Progress
 
+- [x] **WiFi works, alongside USB-NCM.** `CONFIG_STACKCHAN_WIFI_ENABLE` brings up a
+      WiFi STA next to the USB link; the server binds `INADDR_ANY`, so `/ws`, `/debug`
+      and `/debug/reset` answer on the LAN address with no protocol changes. Verified
+      on hardware: Gemini Live ran a full voice session over WiFi — head movement,
+      face changes, petting, zero send failures. `/debug` reports the address as
+      `wifi_ip`. WiFi power save is off (`WIFI_PS_NONE`): it is a debug link, and the
+      default `MIN_MODEM` quantised ping to the AP beacon, 100 ms vs 4–10 ms.
+
+- [x] **lwIP `tiT` stack overflow.** `CONFIG_LWIP_TCPIP_TASK_STACK_SIZE` was IDF's
+      stock 3072 and had never been revisited; `tiT` peaks at 2,996 B, so it ran on
+      **76 bytes** of margin and overflowed once WiFi joined USB-NCM on the same task.
+      Presented as an intermittent crash seconds after boot, stable afterwards. Now
+      6144, and `/debug` exposes `tcpip_stack_free_min` so this is a number, not a
+      debate. Independent of the VPN — it would have bitten on plain WiFi.
+
+- [x] **Internal RAM pruning.** Freed ~11 KB of static DIRAM (USB-NCM NTB buffers
+      `3×3200` → `2×2048` both ways). See `ARCHITECTURE.md` §7 for the full budget,
+      the rule for PSRAM task stacks, and two levers that were measured and found
+      worthless. Do not re-run those experiments.
+
+- [ ] **Re-enable `GET /debug/logs`.** Implemented (16 KB PSRAM ring, chained in front
+      of the console, installed before HAL init) and it worked — but it is currently
+      commented out in `main.cpp` from when it was a crash suspect. It was NOT the
+      cause. Re-enable and confirm. Note it is only reachable while the HTTP server is
+      up, so it does not help with early-boot or crash-loop debugging — for that, the
+      USB-Serial-JTAG console is fully alive during a crash loop (TinyUSB never takes
+      over), which is the better tool.
+
+- [ ] **`POST /debug/download-mode` does not work.** Sets `RTC_CNTL_FORCE_DOWNLOAD_BOOT`
+      then restarts; responds correctly but the device comes back in normal app mode
+      (`0x4001`), so esptool cannot connect. Worth finishing — it would remove the
+      human from the flash loop entirely.
+
+      Meanwhile there IS a working substitute, discovered by accident: while the
+      device is crash-looping or already in the bootloader it enumerates as
+      USB-Serial-JTAG, and this parks it there indefinitely with no button press:
+      ```
+      python -m esptool --chip esp32s3 -p /dev/cu.usbmodem1101 \
+          --before default_reset --after no_reset --no-stub chip_id
+      ```
+
+- [x] **Device must work with no cable and no WiFi.** UI was gated on
+      `is_xiaozhi_ready()` (network-derived), so an offline device had no menu, no home
+      button, no touch. Now gated on the avatar existing, with SNTP kept on the network
+      gate — collapsing the two panicked lwIP. Both fixed; **offline case still untested
+      on hardware.**
+
 - [x] **USB transport** — CDC-**NCM**: the device is a USB network adapter and *listens*
       on 192.168.7.1 for the host to connect (`WebsocketServerProtocol`), so it never
       needs to know the host's address and there is no bespoke wire format.
@@ -103,6 +150,59 @@ device-side equivalents are already fixed; the Python mirror is not.
 - [ ] **Web Serial API browser simulation** — Create a WASM-side shim that connects to a local physical ESP32 via the browser's [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API). This would let the WASM dashboard act as a live debug console for a real device, bridging browser UI controls directly to physical hardware without `socat` or SSH tunnels. *Complexity:* Moderate — requires Chrome-only API, async read/write streams, and TLV frame parsing in JavaScript.
 - [ ] **USB Composite Device: Mass Storage** — Expose ESP32 SPIFFS/LittleFS partition as a USB mass storage device alongside CDC protocol and console interfaces. Enables mounting the device's filesystem on the host machine for direct file inspection, config editing, and state tree visualization as a Unix file tree. *Dependency:* TinyUSB composite descriptor with CDC + MSC classes.
 - [x] **`make all` top-level build target** — Root `Makefile` builds both ESP32 and WASM, with `IDF_PATH` resolved rather than hardcoded.
+
+---
+
+## P2 — Tailscale / MicroLink (parked, deliberately OFF)
+
+**Decision (2026-07-31): not enabling the VPN now.** WiFi already delivers the thing
+the VPN was wanted for — reaching the device without a cable — and it does it with no
+extra memory pressure, no vendored networking stack, and a full verified voice session
+behind it. The VPN extends that reach beyond the LAN, which is worth having later and
+is not worth destabilising a working device for today.
+
+`CONFIG_STACKCHAN_TAILSCALE_ENABLE` is `default n` and `depends on
+STACKCHAN_WIFI_ENABLE`. The code is in tree and builds; the two were split into
+separate Kconfig symbols precisely so WiFi could ship without it.
+
+- [ ] **`ml_wg_mgr` NULL deref.** From a core dump, not inference:
+      ```
+      Crashed task: 'ml_wg_mgr'
+      exccause 0x1c (LoadProhibitedCause)   excvaddr 0xb8
+      epc1 0x4037aecf -> esp_psram_check_ptr_addr (esp_psram.c:593)
+      ```
+      `excvaddr 0xb8` is a small offset from zero — a NULL dereference reached via the
+      heap alloc/free path. Reproduced every boot right after
+      `ml_wg_mgr: CMM endpoint: LAN ...`, once real peers arrived from a MapResponse,
+      which is why QEMU never hit it (the peer table stays empty there).
+      Evidence: `/tmp/stackchan_core.elf` + `/tmp/stackchan_crash.elf`.
+      **Next step:** `bt` in gdb for the caller of `esp_psram_check_ptr_addr`.
+
+      **Caveat worth checking first:** that crash predates the ~11 KB of internal RAM
+      freed since, and `ml_wg_mgr`'s 8 KB stack request had been failing against a
+      7,680 B largest block. Some of what looked like corruption may simply have been
+      allocation failure downstream. Re-run before debugging the old dump.
+
+- [ ] **DERP TLS handshake times out** (`conn=0`, `SSL - The operation timed out`), so
+      no traffic flows even when registration succeeds. Never exercised under QEMU.
+
+- [ ] **Expect to raise `CONFIG_LWIP_TCPIP_TASK_STACK_SIZE` to 8192.** WireGuard runs
+      its Noise handshake in lwIP's context; X25519 alone is typically 1–2 KB of stack.
+      Watch `tcpip_stack_free_min` on first enable. See `ARCHITECTURE.md` §7.4.
+
+- [ ] **Make USB-NCM and the tailnet mutually exclusive, not simultaneous.** They
+      answer the same question — how a host reaches this device — and running both is
+      what makes the memory budget tight. Dropping NCM when the tailnet is on reclaims
+      ~12 KB of internal RAM (8,192 NTB buffers + 4,096 TinyUSB task), roughly double
+      `ml_wg_mgr`'s 6 KB, and gives back the serial console for the device's whole life
+      instead of losing it at boot. Shape: a Kconfig `choice` next to the existing
+      `CONNECTION_TYPE_USB_NCM` / `_SLIP`, not a third orthogonal flag.
+      See `ARCHITECTURE.md` §7.5. **Do this before debugging the VPN further** — it may
+      dissolve the problem rather than solve it.
+
+- [ ] **Publish the MicroLink fixes upstream** — PSRAM staging buffer for NVS writes,
+      task-slot reuse to stop a per-retry leak. Both are genuine ESP-IDF-constraint
+      fixes independent of this project.
 
 ---
 
