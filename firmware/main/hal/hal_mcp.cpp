@@ -161,12 +161,20 @@ void Hal::xiaozhi_mcp_init()
 
     // Sound effects. A voice can only do so much: a little chirp lands where a spoken
     // "ta-da" is just more talking, and these are already on the device as assets.
+    //
+    // "welcome" is deliberately NOT in this list. Every name below is a single,
+    // locale-independent chime in assets/common/ (0.5-1.0s). OGG_WELCOME is different in
+    // kind, not degree: it lives in assets/locales/<lang>/, translated into 37 languages,
+    // 1.66s long -- that pattern means recorded speech, not a sound effect. Exposing it
+    // let the model play a prerecorded human voice line (in whatever voice that asset
+    // happens to be, unrelated to and often overlapping the agent's own narration) mid
+    // -sentence, which is what surfaced as "it randomly switched to a woman's voice".
     mclog::tagInfo(_tag, "add robot.play_sound tool");
     mcp_server.AddTool("self.robot.play_sound",
                        "Play a short sound effect. Use sparingly, as punctuation rather than "
                        "decoration: success when something worked, exclamation for surprise or "
-                       "a mistake, popup to get attention, welcome for a greeting, vibration "
-                       "for a buzz. Never play one on every turn.",
+                       "a mistake, popup to get attention, vibration for a buzz. Never play one "
+                       "on every turn.",
                        PropertyList({Property("name", kPropertyTypeString)}),
                        [this](const PropertyList& properties) -> ReturnValue {
                            const auto name = properties["name"].value<std::string>();
@@ -178,8 +186,6 @@ void Hal::xiaozhi_mcp_init()
                                hal_bridge::app_play_sound(Lang::Sounds::OGG_EXCLAMATION);
                            } else if (name == "popup") {
                                hal_bridge::app_play_sound(Lang::Sounds::OGG_POPUP);
-                           } else if (name == "welcome") {
-                               hal_bridge::app_play_sound(Lang::Sounds::OGG_WELCOME);
                            } else if (name == "vibration") {
                                hal_bridge::app_play_sound(Lang::Sounds::OGG_VIBRATION);
                            } else {

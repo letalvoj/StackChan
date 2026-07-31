@@ -264,7 +264,48 @@ void StackChanAvatarDisplay::SetupUI()
     // Preview either without flashing: tools/facelab/grid.sh <label> {cute|default}
     auto avatar = std::make_unique<CuteAvatar>();
     avatar->init(lv_screen_active());
+
+    // The panel is full-screen and NOT scrollable (see cute.cpp), so LVGL's CLICKED
+    // event fires on any press-then-release over it regardless of how far the finger
+    // travelled in between -- a swipe is, to LVGL, just a click with extra steps.
+    //
+    // That collided with the bottom-edge swipe-up-for-home gesture (HomeGesture, in
+    // home_indicator.cpp): swiping up to reveal the home button ALSO toggled chat,
+    // because both the raw indev poll HomeGesture does and this CLICKED handler see
+    // the same touch. The accidental chat toggle then competes for the same ~1.6s
+    // window the home button is visible in, which is what made the button feel
+    // unreachable -- it was reachable, just contested every time.
+    //
+    // Fixed the same way HomeGesture disambiguates its own gesture: track the press
+    // point manually and compare it to the release point, rather than trust LVGL's
+    // click semantics on a non-scrollable object. kTapSlopPx is deliberately close to
+    // HomeGesture's own kSwipeMinDist (50 px) -- anything that would register as a
+    // home-swipe must NOT also register as a tap here.
+    static lv_point_t press_point{};
+    lv_obj_add_event_cb(
+        avatar->getPanel()->get(),
+        [](lv_event_t* e) {
+            lv_indev_t* indev = lv_indev_active();
+            if (indev) {
+                lv_indev_get_point(indev, &press_point);
+            }
+        },
+        LV_EVENT_PRESSED, nullptr);
+
     avatar->getPanel()->onClick().connect([]() {
+        static constexpr int32_t kTapSlopPx = 24;
+
+        lv_point_t release_point{};
+        lv_indev_t* indev = lv_indev_active();
+        if (indev) {
+            lv_indev_get_point(indev, &release_point);
+            const int32_t dx = release_point.x - press_point.x;
+            const int32_t dy = release_point.y - press_point.y;
+            if (dx * dx + dy * dy > kTapSlopPx * kTapSlopPx) {
+                return;   // moved too far to be a tap -- let HomeGesture have it
+            }
+        }
+
         static uint32_t last_toggle_tick = 0;
         const uint32_t now               = GetHAL().millis();
         if (last_toggle_tick != 0 && now - last_toggle_tick < 2000) {
