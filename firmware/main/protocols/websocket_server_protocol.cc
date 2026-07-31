@@ -14,13 +14,10 @@
 #include "application.h"
 #include "device_state_machine.h"
 #include "hal/board/hal_bridge.h"
-#include "hal/board/log_ring.h"
 #include "hal/board/network_link.h"
 
 #include <esp_log.h>
-#include <esp_heap_caps.h>
 #include <esp_system.h>
-#include <soc/rtc_cntl_reg.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -136,32 +133,6 @@ bool WebsocketServerProtocol::Start() {
         ESP_LOGW(TAG, "could not register /debug/reset");
     }
 
-    const httpd_uri_t logs_uri = {
-        .uri          = "/debug/logs",
-        .method       = HTTP_GET,
-        .handler      = DebugLogsHandler,
-        .user_ctx     = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol    = nullptr,
-    };
-    if (httpd_register_uri_handler(server_, &logs_uri) != ESP_OK) {
-        ESP_LOGW(TAG, "could not register /debug/logs");
-    }
-
-    const httpd_uri_t dl_uri = {
-        .uri          = "/debug/download-mode",
-        .method       = HTTP_POST,
-        .handler      = DebugDownloadModeHandler,
-        .user_ctx     = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol    = nullptr,
-    };
-    if (httpd_register_uri_handler(server_, &dl_uri) != ESP_OK) {
-        ESP_LOGW(TAG, "could not register /debug/download-mode");
-    }
-
     const esp_timer_create_args_t hello_args = {
         .callback = SendHelloWork,
         .arg = this,
@@ -246,6 +217,59 @@ void WebsocketServerProtocol::DropClient(bool notify) {
     }
     if (notify && on_disconnected_) {
         on_disconnected_();
+    }
+}
+
+uint32_t WebsocketServerProtocol::HostPeerAddressV4() {
+    if (instance_ == nullptr) {
+        return 0;
+    }
+    int fd = instance_->client_fd_.load();
+    if (fd < 0) {
+        return 0;
+    }
+    // Asked of the socket rather than remembered from the handshake: the answer cannot
+    // go stale, and there is no second copy of the truth to drift.
+    struct sockaddr_in6 addr = {};
+    socklen_t len = sizeof(addr);
+    if (getpeername(fd, reinterpret_cast<struct sockaddr*>(&addr), &len) != 0) {
+        return 0;
+    }
+    if (addr.sin6_family == AF_INET) {
+        auto* v4 = reinterpret_cast<struct sockaddr_in*>(&addr);
+        return ntohl(v4->sin_addr.s_addr);
+    }
+    if (addr.sin6_family == AF_INET6 && IN6_IS_ADDR_V4MAPPED(&addr.sin6_addr)) {
+        // lwIP hands back v4-mapped addresses (::ffff:a.b.c.d) on a dual-stack socket,
+        // so a client that is plainly IPv4 still arrives as AF_INET6. Missing this is
+        // how the indicator would silently read "unknown" for every real connection.
+        uint32_t mapped;
+        memcpy(&mapped, &addr.sin6_addr.un.u32_addr[3], sizeof(mapped));
+        return ntohl(mapped);
+    }
+    return 0;
+}
+
+void WebsocketServerProtocol::DropRemoteClient() {
+    if (instance_ == nullptr) {
+        return;
+    }
+    const int fd = instance_->client_fd_.load();
+    if (fd < 0) {
+        return;
+    }
+    const uint32_t peer = HostPeerAddressV4();
+    if ((peer & 0xFFFFFF00u) == 0xC0A80700u) {
+        return;   // 192.168.7.0/24 -- came in over the cable, untouched by a radio drop
+    }
+    ESP_LOGW(TAG, "network went away; dropping remote host on fd=%d", fd);
+    // Close the SOCKET, not just the bookkeeping. Clearing client_fd_ alone would let
+    // httpd keep a dead session in its table and, worse, leave the slot occupied so a
+    // reconnect after the radio returns is refused.
+    instance_->DropClient(true);
+    esp_err_t closed = httpd_sess_trigger_close(instance_->server_, fd);
+    if (closed != ESP_OK) {
+        ESP_LOGW(TAG, "could not close fd=%d: %s", fd, esp_err_to_name(closed));
     }
 }
 
@@ -372,77 +396,6 @@ esp_err_t WebsocketServerProtocol::DebugResetHandler(httpd_req_t* req) {
                      DeviceStateMachine::GetStateName(app.GetDeviceState()));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n > 0 ? n : 0);
-}
-
-esp_err_t WebsocketServerProtocol::DebugLogsHandler(httpd_req_t* req) {
-    // Chunked rather than one buffer: the ring is 16 KB and a single stack
-    // allocation that size on the httpd task is a good way to manufacture the exact
-    // internal-RAM problem this project has spent a session fighting. PSRAM for the
-    // scratch copy, for the same reason.
-    constexpr size_t kChunk = 2048;
-    char* buf = static_cast<char*>(heap_caps_malloc(kChunk, MALLOC_CAP_SPIRAM));
-    if (buf == nullptr) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-        return ESP_FAIL;
-    }
-
-    // Snapshot once into PSRAM, then stream it out. Taking one consistent snapshot
-    // beats reading the ring repeatedly while it is still being written to.
-    const size_t total = stackchan::LogRing::Size();
-    char* snap = static_cast<char*>(heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM));
-    if (snap == nullptr) {
-        heap_caps_free(buf);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-        return ESP_FAIL;
-    }
-    const size_t n = stackchan::LogRing::Snapshot(snap, total + 1);
-
-    httpd_resp_set_type(req, "text/plain");
-    for (size_t off = 0; off < n; off += kChunk) {
-        const size_t len = (n - off < kChunk) ? (n - off) : kChunk;
-        memcpy(buf, snap + off, len);
-        if (httpd_resp_send_chunk(req, buf, len) != ESP_OK) {
-            break;
-        }
-    }
-    httpd_resp_send_chunk(req, nullptr, 0);   // terminate the chunked response
-
-    heap_caps_free(snap);
-    heap_caps_free(buf);
-    return ESP_OK;
-}
-
-esp_err_t WebsocketServerProtocol::DebugDownloadModeHandler(httpd_req_t* req) {
-    ESP_LOGW(TAG, "/debug/download-mode -- rebooting into the ROM serial bootloader");
-
-    const char* body = "{\"rebooting_into\":\"download-mode\"}";
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, body, strlen(body));
-
-    // Reboot from a timer, not from here: esp_restart() inside the handler kills the
-    // socket before the response leaves, so the caller sees a connection reset and
-    // cannot tell "it worked" from "it crashed".
-    static esp_timer_handle_t dl_timer = nullptr;
-    if (dl_timer == nullptr) {
-        const esp_timer_create_args_t args = {
-            .callback = [](void*) {
-                // Survives the reset and tells the ROM to enter the serial bootloader
-                // instead of loading the app -- which is what frees GPIO19/20 back to
-                // USB-Serial-JTAG so esptool has something to talk to.
-                REG_SET_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-                esp_restart();
-            },
-            .arg = nullptr,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "dl_mode",
-            .skip_unhandled_events = true,
-        };
-        if (esp_timer_create(&args, &dl_timer) != ESP_OK) {
-            return ESP_OK;   // response already sent; nothing useful left to say
-        }
-    }
-    esp_timer_start_once(dl_timer, 250 * 1000);   // 250 ms: time for the reply to flush
-    return ESP_OK;
 }
 
 esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {

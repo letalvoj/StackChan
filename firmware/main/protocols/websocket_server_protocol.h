@@ -49,6 +49,26 @@ public:
     // Is a host connected right now? Static so UI code can ask without owning a
     // reference. Returns false when the protocol does not exist yet (early boot) or
     // when this build has no USB transport, which is the honest answer in both cases.
+    // The connected host's IPv4 address in host byte order, or 0 if nobody is on.
+    //
+    // This is the only runtime answer to "which road did the client come in on?".
+    // transport_label() cannot answer it: it is compiled from CONNECTION_TYPE_*, so it
+    // says "USB" even when the client arrived over WiFi, because the server binds
+    // INADDR_ANY and one listener serves every interface.
+    static uint32_t HostPeerAddressV4();
+
+    // Drop a host that reached us over the RADIO, because the radio just went away.
+    //
+    // TCP cannot discover this on its own in any useful time: with the interface gone
+    // there is nobody to send a RST, so the socket sits ESTABLISHED and keepalive is
+    // the only backstop -- tens of seconds during which the device believes it has a
+    // host, lights the LED accordingly, and will happily open a conversation into a
+    // connection that cannot deliver a single frame.
+    //
+    // Deliberately leaves a USB client alone: the two transports share one listener,
+    // and losing WiFi says nothing about the cable.
+    static void DropRemoteClient();
+
     static bool IsHostConnected() {
         return instance_ != nullptr && instance_->HasClient();
     }
@@ -117,20 +137,24 @@ private:
     // for when the device is unreachable by hand. Does not reboot; the log is evidence.
     static esp_err_t DebugResetHandler(httpd_req_t* req);
 
-    // GET /debug/logs -- the recent ESP_LOG scrollback as plain text, oldest first.
-    // The CDC console dies with a panic and does not exist without a cable; this
-    // survives both, and works over the tailnet because httpd binds INADDR_ANY.
-    static esp_err_t DebugLogsHandler(httpd_req_t* req);
-
-    // POST /debug/download-mode -- reboot straight into the ROM serial bootloader.
+    // There is deliberately no /debug/logs and no /debug/download-mode. Both were
+    // built, both were removed on 2026-07-31, and both failed for the same reason:
+    // they only work when the device is healthy, which is not when you need them.
     //
-    // Removes the human from the flash loop. Normally entering download mode needs a
-    // physical 3-second RST hold, because once the app is up TinyUSB owns GPIO19/20
-    // and the USB-Serial-JTAG peripheral esptool would talk to no longer exists.
-    // Setting RTC_CNTL_FORCE_DOWNLOAD_BOOT before esp_restart() makes the ROM come up
-    // in download mode instead of the app, which frees those pins again -- so esptool
-    // can connect on its own.
-    static esp_err_t DebugDownloadModeHandler(httpd_req_t* req);
+    //   /debug/logs served a 16 KB PSRAM ring over HTTP. But it is reachable only
+    //   while the HTTP server is up, and the failures worth debugging are boot loops
+    //   and early-boot panics, where it never starts. The real tool is the
+    //   USB-Serial-JTAG console, which stays fully alive during a crash loop
+    //   precisely because TinyUSB never gets far enough to take the pins.
+    //
+    //   /debug/download-mode set RTC_CNTL_FORCE_DOWNLOAD_BOOT and rebooted, to spare
+    //   the human a 3-second RST hold. It never worked -- the device came back in app
+    //   mode -- and it was actively harmful: that latch is sticky across resets, so a
+    //   single call trapped the device in download mode until it was power-cycled,
+    //   looking exactly like a hung boot.
+    //
+    // See firmware/DEBUGGING.md 3. Do not reintroduce either without a plan for the
+    // crash-loop case, which is the only case that matters.
 
     static void OnClientClosed(httpd_handle_t hd, int sockfd);
     static void SendHelloWork(void* arg);

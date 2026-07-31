@@ -9,7 +9,6 @@
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <hal/hal.h>
-#include <hal/board/log_ring.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -19,15 +18,6 @@ extern "C" void app_main(void)
     // Setup logger
     mclog::set_level(mclog::level_info);
     mclog::set_time_format(mclog::time_format_unix_milliseconds);
-
-    // DISABLED while the Tailscale crash is being isolated. The ring buffer lives in
-    // PSRAM and is written on every log line, which makes it a suspect for the silent
-    // reboots (PSRAM is unreachable while a flash write has the cache off, and the
-    // resulting reset cannot print anything -- exactly the symptom). Guarding the
-    // write on spi_flash_cache_enabled() did not stop the loop, so it is being taken
-    // out of the picture entirely rather than left in as a confounding variable.
-    // Re-enable once the VPN is stable, and only then find out whether it survives.
-    // stackchan::LogRing::Install();
 
     // HAL init
     GetHAL().init();
