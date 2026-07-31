@@ -54,6 +54,61 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ---------------------------------------------------------------------------
+# Internal RAM budget.
+#
+# DIRAM is 341,760 bytes and it is the ONLY memory that can hold FreeRTOS task
+# stacks, DMA buffers, or anything touched while the flash cache is off. PSRAM is
+# 8 MB and effectively free, but can do none of those jobs. Flash likewise has over
+# a megabyte spare -- pruning assets or menus buys nothing here, because they are
+# not what is scarce.
+#
+# Measured 2026-07-31: 241,955 bytes (70.8%) gone to the static image before
+# app_main runs, leaving ~97 KB for every task stack and driver buffer combined.
+# Observed steady state was ~18 KB free with a largest contiguous block of 7,680
+# bytes -- which is why an 8 KB task stack request failed while "megabytes free"
+# was technically true. Every crash this session traces back to this line item.
+#
+# Treat internal RAM as the budget it is: anything added here must be paid for.
+
+# DO NOT bother disabling the *_IN_IRAM driver flags to reclaim IRAM. It was tried
+# and measured on 2026-07-31: turning off RMT (x3), MCPWM, GPTIMER and SPI-slave
+# changed .text in DIRAM by exactly ZERO bytes, 142,763 before and after. Those
+# drivers are not linked into this firmware, so their ISRs never occupied IRAM to
+# begin with -- an unused driver's IRAM flag costs nothing. "main/ does not use it"
+# means there is nothing to save, not that there is something to save.
+#
+# The flags that WOULD matter are the ones for peripherals actually in use -- SPI
+# master (LCD), I2C master (touch, IMU, codec), UART (console), GDMA -- and those
+# are on genuine cache-off paths, where disabling them trades a few KB for
+# heisenbugs that only appear during flash writes. Not worth it.
+
+# USB-NCM's NTB buffers are DMA buffers, so they are internal RAM by necessity:
+# (3 x 3200) + (3 x 3200) = 19,200 bytes, the single largest runtime consumer on
+# the device. 2 x 2048 each way is 8,192 -- an 11 KB saving for slightly lower USB
+# throughput on a link used for debugging and audio, neither of which is close to
+# saturating it.
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFFS_COUNT=2
+CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=2
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFF_MAX_SIZE=2048
+CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
+
+# lwIP's tcpip task ("tiT"). ESP-IDF's stock default is 3072, which was fine while
+# this device had exactly one network interface. It is not fine with two: enabling
+# WiFi alongside USB-NCM made one task service both netifs plus DHCP and DNS, and it
+# overflowed -- confirmed from a core dump, "A stack overflow in task tiT has been
+# detected" in vApplicationStackOverflowHook.
+#
+# It presented as an INTERMITTENT crash a few seconds after boot, stable afterwards,
+# because whether it overflows depends on what happens to be on the stack when the
+# second interface does something. That is worth remembering: an intermittent
+# post-boot crash right after adding a netif is this, until proven otherwise.
+#
+# 6144 rather than just-enough-for-two, because WireGuard adds a THIRD netif and
+# runs its crypto in lwIP's context, on this stack. Sized once for where this is
+# going instead of rediscovering the same crash one interface later.
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=6144
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
