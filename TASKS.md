@@ -26,24 +26,23 @@ Captured during architectural design sessions. Items are roughly priority-ordere
       the rule for PSRAM task stacks, and two levers that were measured and found
       worthless. Do not re-run those experiments.
 
-- [ ] **Re-enable `GET /debug/logs`.** Implemented (16 KB PSRAM ring, chained in front
-      of the console, installed before HAL init) and it worked — but it is currently
-      commented out in `main.cpp` from when it was a crash suspect. It was NOT the
-      cause. Re-enable and confirm. Note it is only reachable while the HTTP server is
-      up, so it does not help with early-boot or crash-loop debugging — for that, the
-      USB-Serial-JTAG console is fully alive during a crash loop (TinyUSB never takes
-      over), which is the better tool.
+- [x] **Removed `GET /debug/logs` and `POST /debug/download-mode`.** Both only worked
+      when the device was healthy, which is not when either was needed. The log ring
+      was reachable only while the HTTP server was up, and the failures worth debugging
+      are boot loops and early panics — where the USB-Serial-JTAG console *is* alive,
+      because TinyUSB never gets far enough to take the pins. download-mode never
+      worked at all and was actively harmful: its `RTC_CNTL_FORCE_DOWNLOAD_BOOT` latch
+      is sticky across resets and trapped the device until a power cycle. ~16 KB of
+      PSRAM and both traps gone.
 
-- [ ] **`POST /debug/download-mode` does not work.** Sets `RTC_CNTL_FORCE_DOWNLOAD_BOOT`
-      then restarts; responds correctly but the device comes back in normal app mode
-      (`0x4001`), so esptool cannot connect. Worth finishing — it would remove the
-      human from the flash loop entirely.
-
-      Meanwhile there IS a working substitute, discovered by accident: while the
-      device is crash-looping or already in the bootloader it enumerates as
-      USB-Serial-JTAG, and this parks it there indefinitely with no button press:
+- [ ] **Getting a human out of the flash loop is still unsolved, and may be
+      unsolvable.** esptool can write flash unattended from `0x1001`, but cannot start
+      the app: `--after hard_reset` and `esptool run` both report success and leave the
+      chip parked silently in ROM. So every flash costs one physical button press.
+      `/debug/download-mode` was the attempt to avoid it and has been removed (see
+      above). To park a crash-looping device quietly with no button — this does work:
       ```
-      python -m esptool --chip esp32s3 -p /dev/cu.usbmodem1101 \
+      python -m esptool --chip esp32s3 -p "$(ls /dev/cu.usbmodem* | head -1)" \
           --before default_reset --after no_reset --no-stub chip_id
       ```
 

@@ -231,6 +231,50 @@ Each of these presented as something else entirely.
 | Tap goes green, robot hears nothing, `audio_channel_open:false`, log spams `Channel timeout N seconds` | Upstream declares a channel dead after 120 s with no inbound frame, and `IsAudioChannelOpened()` is gated on it. That rule is for the client role; here the device is the server and an idle agent legitimately sends nothing for hours. `frames_rx:1` (just the `hello`) is the tell. Fixed by overriding `IsTimeout()` to false — TCP keepalive already reaps dead peers |
 | Talking does nothing: `listening`, `audio_channel_open:true`, but `frames_tx` frozen | The audio pipeline did not survive a USB drop. `uptime_s` keeps counting, so the app never rebooted and everything *looks* healthy. `frames_tx` counts every send including audio — if it does not move while you talk, the mic is not reaching the wire. `/debug/reset` restores the state machine but **cannot restart the audio service**; press reset |
 | Model describes the previous photo, or answers blind | Ordering, not latency. Realtime media is ordered against the audio clock, not conversation turns — a one-shot image must go via `send_client_content` |
+| **Any combination of**: face stuck "talking" with no sound; touches and gestures lag; mic ignored; tap-to-stop does nothing | **An MCP tool handler is blocking.** See §5.1 — these are one bug, not four |
+| Photo shows where the head *used to* point | The camera is bolted to the head and the model fires `set_head_angles` then `take_photo` back to back. Wait for `motion().isMoving()` in the **camera** handler, never in the movement one (§5.1) |
+
+---
+
+### 5.1 Never block in an MCP tool handler
+
+**MCP handlers run on the httpd task, and the httpd task is the audio path.** Everything
+the agent does — every head turn, face change, sound — is dispatched on the same task
+that receives WebSocket frames from the client. Block it and the conversation stops.
+
+This was learned expensively. `set_head_angles` was made to wait until the servos
+finished, so that "look up and take a photo" would not photograph the old direction.
+It worked, and it produced **four symptoms that look completely unrelated**:
+
+* **Face stuck "talking", no sound.** The blocked task stopped draining the socket, the
+  client's sends backed up behind a full TCP window, and the end-of-turn `tts stop`
+  never arrived. `device_state:"speaking"` with `frames_tx` frozen is the tell.
+* **Touches and gestures lag.** The wait polled `isMoving()` every 20 ms *while taking
+  the LVGL lock*, contending 50×/second with the rendering task.
+* **The mic is ignored.** Petting moves the servos too, so `isMoving()` stayed true and
+  every head move burned the full timeout.
+* **Tap-to-stop does nothing.** The toggle could not get through the stalled task.
+
+Chasing any one of these leads nowhere near the cause. The shape to recognise is
+*several unrelated subsystems degrading at once, shortly after a tool call.*
+
+Rules that follow:
+
+1. **Tool handlers return immediately.** If a tool must wait on physical reality, put
+   the wait where it is affordable — a rare, already-slow handler such as
+   `camera.capture`, not a continuous one such as head movement.
+2. **Never hold `LvglLockGuard` across a wait**, and do not re-acquire it in a poll
+   loop. Reading a bool without it is fine; a torn read costs one more poll.
+3. **Never `vTaskDelay` on the touch path.** A 150 ms LED blink in the tap handler is
+   felt directly as a laggy screen.
+4. Ask *which task does this run on?* before adding any wait. That single question
+   would have prevented all of the above.
+
+To recover a device stuck like this without touching it — works over USB or WiFi:
+
+```bash
+curl -s -X POST http://192.168.7.1:8081/debug/reset
+```
 
 ---
 
