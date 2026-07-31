@@ -142,10 +142,46 @@ void Hal::xiaozhi_board_init()
     hal_bridge::xiaozhi_board_init();
 }
 
+// The device has TWO independent readiness lifecycles, and conflating them has now
+// caused a bug in each direction -- which is why they are separate functions with
+// separate names rather than flags in one loop body.
+//
+//   * LOCAL UI needs the avatar to exist. Nothing more. A robot sitting on a desk
+//     with no cable and no WiFi must still have a menu and respond to touch;
+//     connectivity is a feature of this device, not a precondition for its screen.
+//     Gating this on the network left an offline device with no UI at all: no home
+//     button, no status bar, no way out.
+//
+//   * NETWORK SERVICES need a live lwIP stack. Not "probably up" -- actually up.
+//     lwIP does not degrade gracefully when called early, it panics
+//     (`assert failed: tcpip_callback ... (Invalid mbox)`), boot-looping the device.
+//     is_xiaozhi_ready() latches only after "Network connected", so it is the
+//     correct precondition here and the wrong one above.
+//
+// Both are idempotent and own their own precondition, so the caller does not have to
+// remember the ordering rules that got this wrong twice.
+
+static void _ensure_local_ui_created()
+{
+    if (view::is_home_indicator_created() || !GetStackChan().hasAvatar()) {
+        return;
+    }
+    view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
+    view::create_status_bar(0x81DBBD, 0x134233);
+}
+
+static void _ensure_network_services_started()
+{
+    static bool started = false;
+    if (started || !hal_bridge::is_xiaozhi_ready()) {
+        return;
+    }
+    GetHAL().startSntp();
+    started = true;
+}
+
 static void _stackchan_update_task(void* param)
 {
-    bool is_setup_done = false;
-
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -159,18 +195,10 @@ static void _stackchan_update_task(void* param)
 
         GetStackChan().update();
 
-        if (!hal_bridge::is_xiaozhi_ready()) {
-            continue;
-        }
+        _ensure_local_ui_created();
+        _ensure_network_services_started();
 
-        if (!is_setup_done) {
-            // Setup when xiaozhi ready
-            GetHAL().startSntp();
-            view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
-            view::create_status_bar(0x81DBBD, 0x134233);
-            is_setup_done = true;
-        }
-
+        // No-ops until the widgets exist, so this needs no guard of its own.
         view::update_home_indicator();
         view::update_status_bar();
     }
@@ -196,7 +224,23 @@ void Hal::startXiaozhi()
         hal_bridge::app_play_sound(OGG_NEW_NOTIFICATION);
     });
 
-    // Start stackchan update task
+    // INTERNAL RAM, deliberately -- do not "optimise" this onto a PSRAM stack.
+    //
+    // Tried on 2026-07-31 and it boot-loops immediately:
+    //   assert failed: esp_cache_freeze_caches_disable_interrupts
+    //                  (s_task_stack_is_sane_when_cache_frozen())
+    //
+    // The reasoning that led there was that a PSRAM stack is only unsafe for a task
+    // that WRITES FLASH, and this loop touches nothing but LVGL and the avatar. That
+    // test is too narrow. The cache is also frozen for DMA coherency, and this loop
+    // drives an SPI LCD with a 2 MB PSRAM image cache behind it -- so it freezes the
+    // cache constantly without going anywhere near flash.
+    //
+    // The correct test is "can this task ever cause a cache freeze?", which covers
+    // DMA sync as well as flash writes, and is a far larger set than it looks.
+    // ESP-IDF asserts on it rather than corrupting silently, which is the one mercy.
+    // The imu and headtouch tasks ARE on PSRAM stacks and are fine; they read
+    // sensors over I2C and touch no DMA'd framebuffer.
     xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 4096, NULL, 3, NULL, 1);
 
     hal_bridge::start_xiaozhi_app();
