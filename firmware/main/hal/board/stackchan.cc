@@ -14,6 +14,7 @@ using StackChanNetBoard = WifiBoard;
 #include "application.h"
 #include "protocols/websocket_server_protocol.h"
 #include "hal/hal.h"       // GetHAL().millis() for the capture-blink timestamp
+#include <assets/lang_config.h>   // Lang::Sounds::OGG_*
 #include <atomic>
 #include "config.h"
 #include "power_save_timer.h"
@@ -676,6 +677,45 @@ bool hal_bridge::is_host_connected()
 #endif
 }
 
+void hal_bridge::end_conversation()
+{
+    // StopListening() rather than ToggleChatState(): toggling is state-dependent, and
+    // the one moment this is called -- right after the agent finishes a goodbye -- is
+    // exactly when the device may have already re-opened the turn on its own. A toggle
+    // would then re-OPEN the session it was asked to close, which is the worst possible
+    // outcome for a "goodbye" and would look like the robot refusing to let go.
+    auto& app = Application::GetInstance();
+    app.StopListening();
+    app.SetDeviceState(kDeviceStateIdle);
+}
+
+hal_bridge::GatewayLink hal_bridge::gateway_link()
+{
+#if CONFIG_CONNECTION_TYPE_USB_NCM
+    const uint32_t peer = WebsocketServerProtocol::HostPeerAddressV4();
+    if (peer == 0) {
+        return GatewayLink::None;
+    }
+    // Classified by subnet because that is the one fact the device can observe. The
+    // USB-NCM link always hands the host 192.168.7.2 (the device is .1, and it runs
+    // the DHCP server, so this is not a guess), and Tailscale hands out 100.64.0.0/10
+    // by definition -- the CGNAT range it is required to use. Everything else is the
+    // ordinary LAN, which is the right default: an unrecognised address is far more
+    // likely to be a normal router than a mystery.
+    if ((peer & 0xFFFFFF00u) == 0xC0A80700u) {   // 192.168.7.0/24
+        return GatewayLink::Usb;
+    }
+    if ((peer & 0xFFC00000u) == 0x64400000u) {   // 100.64.0.0/10
+        return GatewayLink::Vpn;
+    }
+    return GatewayLink::Wifi;
+#else
+    // Other transports dial out; there is no peer socket to interrogate, so fall back
+    // to the binary answer rather than inventing a road.
+    return is_host_connected() ? GatewayLink::Wifi : GatewayLink::None;
+#endif
+}
+
 const char* hal_bridge::transport_label()
 {
 #if CONFIG_CONNECTION_TYPE_USB_NCM
@@ -687,11 +727,39 @@ const char* hal_bridge::transport_label()
 #endif
 }
 
+// A conversation needs a host on the other end -- this device does no inference of its
+// own. Opening one with nobody attached lights the listening LED, captures the
+// microphone and streams frames into a socket that does not exist, then falls back to
+// idle seconds later with no explanation. That is worse than refusing: it looks like
+// the robot heard you and chose to ignore you.
+//
+// Refusing is not silent: a chirp says "I felt that, and this is why nothing is going
+// to happen". The LED is already red for exactly this reason, so it needs no flash --
+// and this runs on the touch handler, where anything that blocks is felt directly as
+// a laggy screen. An earlier version delayed 150 ms here to blink the LED and did
+// precisely that.
+static bool _refuse_if_no_host()
+{
+    if (hal_bridge::is_host_connected()) {
+        return false;
+    }
+    ESP_LOGW(TAG, "face tap ignored -- no host connected");
+    hal_bridge::app_play_sound(Lang::Sounds::OGG_EXCLAMATION);
+    return true;
+}
+
 void hal_bridge::toggle_xiaozhi_chat_state()
 {
     auto& app = Application::GetInstance();
     if (app.GetDeviceState() == kDeviceStateStarting) {
         // EnterWifiConfigMode();
+        return;
+    }
+    // Only guard the OPENING of a session. A tap while listening or speaking is a
+    // deliberate interrupt, and must keep working even if the host has just vanished --
+    // otherwise a dropped connection leaves the robot stuck talking with no way to
+    // shut it up.
+    if (app.GetDeviceState() == kDeviceStateIdle && _refuse_if_no_host()) {
         return;
     }
     app.ToggleChatState();
@@ -701,6 +769,9 @@ void hal_bridge::toggle_xiaozhi_chat_state_with_video()
 {
     auto& app = Application::GetInstance();
     if (app.GetDeviceState() == kDeviceStateStarting) {
+        return;
+    }
+    if (app.GetDeviceState() == kDeviceStateIdle && _refuse_if_no_host()) {
         return;
     }
     app.ToggleChatStateWithVideo();

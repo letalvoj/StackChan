@@ -13,9 +13,12 @@
 // which fails to compile with an unhelpful "incomplete type" error pointing at
 // FreeRTOS's own header, nowhere near the actual mistake.
 #include <esp_heap_caps.h>
+#include <esp_event.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <hal/utils/wifi_connect/wifi_station.h>
+#include <protocols/websocket_server_protocol.h>
 #if CONFIG_STACKCHAN_TAILSCALE_ENABLE
 #include <microlink.h>
 #endif
@@ -205,12 +208,46 @@ void OnWifiFailed(const std::string& ssid)
     g_wifi->AddAuth(CONFIG_STACKCHAN_WIFI_SSID, CONFIG_STACKCHAN_WIFI_PASSWORD);
 }
 
+// StackChanWifiStation handles WIFI_EVENT_STA_DISCONNECTED only while it is still
+// TRYING to associate. Once it has succeeded, is_connecting_ is false and a later drop
+// falls through its handler doing nothing at all: no callback, no retry. The device is
+// then off the network permanently until it is rebooted, while every layer above still
+// believes it is connected. That is the bug this exists to fix, and it needs a second
+// handler rather than a change to the shared class, which the provisioning flow also
+// uses and expects to give up.
+void OnWifiDropped(void*, esp_event_base_t, int32_t, void*)
+{
+    mclog::tagWarn(_tag, "WiFi link lost");
+
+    // Tell the protocol immediately. Waiting for TCP to notice takes tens of seconds --
+    // with the interface gone there is nobody to send a RST, so the socket stays
+    // ESTABLISHED and keepalive is the only backstop. During that window a face tap
+    // opens a conversation into a connection that cannot carry it, which is exactly
+    // what "it tried to start talking and then gave up" looks like from the outside.
+    WebsocketServerProtocol::DropRemoteClient();
+
+    // And get back on. Harmless if a connect is already in flight -- esp_wifi_connect
+    // simply reports it -- which matters because this fires for association failures
+    // too, where StackChanWifiStation is still retrying on its own.
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+        mclog::tagWarn(_tag, "reconnect attempt: {}", esp_err_to_name(err));
+    }
+}
+
 void NetworkLinkTask(void*)
 {
     g_wifi = new StackChanWifiStation();
     g_wifi->OnConnected(OnWifiUp);
     g_wifi->OnConnectFailed(OnWifiFailed);
     g_wifi->Start();
+
+    // Registered AFTER Start(), which is what creates the default event loop and the
+    // STA netif. ESP-IDF dispatches to every registered handler, so this runs
+    // alongside StackChanWifiStation's own rather than replacing it.
+    esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                                        OnWifiDropped, nullptr, nullptr);
+
     g_wifi->AddAuth(CONFIG_STACKCHAN_WIFI_SSID, CONFIG_STACKCHAN_WIFI_PASSWORD);
 
     // Everything from here is event-driven (WiFi events, and microlink's own tasks
@@ -239,6 +276,22 @@ std::string WifiIpAddress()
     return g_wifi != nullptr ? g_wifi->GetIpAddress() : std::string();
 }
 
+WifiLink WifiLinkState()
+{
+    // g_wifi is created by the link task, so a null here means "enabled in the build
+    // but not up yet" -- Disconnected, not Disabled. Disabled is a compile-time fact
+    // and lives in the #else branch below.
+    if (g_wifi == nullptr || !g_wifi->IsConnected()) {
+        return WifiLink::Disconnected;
+    }
+    return WifiLink::Connected;
+}
+
+int8_t WifiRssiDbm()
+{
+    return (g_wifi != nullptr && g_wifi->IsConnected()) ? g_wifi->GetRssi() : 0;
+}
+
 #else  // !CONFIG_STACKCHAN_WIFI_ENABLE
 
 void StartNetworkLink()
@@ -251,6 +304,16 @@ void StartNetworkLink()
 std::string WifiIpAddress()
 {
     return std::string();
+}
+
+WifiLink WifiLinkState()
+{
+    return WifiLink::Disabled;
+}
+
+int8_t WifiRssiDbm()
+{
+    return 0;
 }
 
 #endif

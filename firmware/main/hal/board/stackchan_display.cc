@@ -542,9 +542,13 @@ void StackChanAvatarDisplay::UpdateStatusBar(bool update_all)
     conn_last_state_ = state;
 
     if (hal_bridge::is_xiaozhi_idle()) {
-        // Pale red (24/255) rather than a hard red: waiting for a host is a normal
-        // resting state, not a fault, and an unattended robot should not look alarmed.
-        GetHAL().setRgbColor(0, connected ? 0 : 24, 0, 0);
+        // 96/255, not the 24 this used to be. The intent behind 24 was that waiting for
+        // a host is a resting state rather than a fault, which is true -- but at that
+        // level it was indistinguishable from the LED being off, so "no host" and
+        // "connected and idle" looked identical and the indicator conveyed nothing.
+        // Legible red still reads as resting rather than alarmed; invisible red reads
+        // as nothing at all.
+        GetHAL().setRgbColor(0, connected ? 0 : 96, 0, 0);
         GetHAL().refreshRgb();
     }
 }

@@ -39,6 +39,29 @@ namespace stackchan {
 void StartNetworkLink();
 
 /**
+ * @brief State of the WiFi station this module owns.
+ *
+ * Deliberately separate from Hal::getWifiStatus(), which reads xiaozhi's
+ * WifiManager -- a DIFFERENT object that knows nothing about StackChanWifiStation.
+ * Asking it about this link returns None even while the radio is associated and
+ * serving traffic, which is exactly the kind of indicator that is worse than no
+ * indicator at all.
+ */
+enum class WifiLink {
+    Disabled,      ///< Not built in, or CONFIG_STACKCHAN_WIFI_ENABLE is off.
+    Disconnected,  ///< Enabled and trying, but not associated.
+    Connected,     ///< Associated and holding an address.
+};
+
+WifiLink WifiLinkState();
+
+/**
+ * @brief Signal strength in dBm, or 0 when not connected. Only meaningful when
+ *        WifiLinkState() == Connected.
+ */
+int8_t WifiRssiDbm();
+
+/**
  * @brief The device's WiFi address, or "" if WiFi is disabled or not yet up.
  *
  * Exposed for /debug. Reporting it over the USB link is the only practical way to

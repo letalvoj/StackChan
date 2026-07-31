@@ -87,6 +87,25 @@ bool is_host_connected();
 // Short name of the transport this build listens on: "USB", "WiFi", ... Shown on the
 // badge, so it answers "not connected *to what*" without needing a serial log.
 const char* transport_label();
+
+// End the voice session and return the device to idle, as if the person had tapped
+// the face to close it. Used by the agent to hang up on itself after a goodbye.
+void end_conversation();
+
+// Which road the connected host actually came in on.
+//
+// NOT the same question as transport_label(), which is compiled from CONNECTION_TYPE_*
+// and therefore says "USB" even for a client that arrived over WiFi. There is one
+// listener bound to INADDR_ANY serving every interface at once, so the only honest
+// answer comes from the peer address of the live socket.
+enum class GatewayLink {
+    None,  ///< No host connected.
+    Usb,   ///< 192.168.7.0/24 -- the USB-NCM subnet.
+    Vpn,   ///< 100.64.0.0/10 -- Tailscale's CGNAT range.
+    Wifi,  ///< Anything else, i.e. the ordinary LAN.
+};
+
+GatewayLink gateway_link();
 XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 

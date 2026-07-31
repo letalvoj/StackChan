@@ -13,6 +13,7 @@
 #include <fmt/chrono.h>
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
+#include <hal/board/network_link.h>
 #include <memory>
 #include <vector>
 #include <lvgl.h>
@@ -234,8 +235,9 @@ class Wifi : public Widget {
 public:
     Wifi(lv_obj_t* parent, uint32_t colorPrimary)
     {
+        _color_primary = colorPrimary;
         _wifi_icon = std::make_unique<Image>(parent);
-        _wifi_icon->align(LV_ALIGN_LEFT_MID, 58, 0);  // Link owns the far left
+        _wifi_icon->align(LV_ALIGN_LEFT_MID, 58, 0);  // Gateway owns the far left
         _wifi_icon->setImageRecolor(lv_color_hex(colorPrimary));
         _wifi_icon->setImageRecolorOpa(LV_OPA_COVER);
 
@@ -249,23 +251,38 @@ public:
 
     void update() override
     {
-        auto status = GetHAL().getWifiStatus();
-        switch (status) {
-            case WifiStatus::None:
+        // THREE states, not two, and the difference matters when something is wrong:
+        //
+        //   off          -- WiFi is not enabled in this build. Nothing is broken, so
+        //                   show nothing rather than an alarming crossed-out icon.
+        //   disconnected -- enabled and trying, but not associated. Crossed out, red.
+        //                   This is the state worth noticing.
+        //   connected    -- bars by signal strength.
+        //
+        // Collapsing "off" and "disconnected" into one glyph was the old behaviour and
+        // it lies in both directions: a USB-only build looked permanently broken, and
+        // a WiFi build that failed to associate looked identical to one that was never
+        // asked to.
+        switch (stackchan::WifiLinkState()) {
+            case stackchan::WifiLink::Disabled:
                 _wifi_icon->setSrc(NULL);
-                break;
-            case WifiStatus::Low:
-                _wifi_icon->setSrc(&_icon_wifi_low);
-                break;
-            case WifiStatus::Medium:
-                _wifi_icon->setSrc(&_icon_wifi_medium);
-                break;
-            case WifiStatus::High:
-                _wifi_icon->setSrc(&_icon_wifi_high);
-                break;
-            default:
+                return;
+
+            case stackchan::WifiLink::Disconnected:
                 _wifi_icon->setSrc(&_icon_wifi_slash);
-                break;
+                _wifi_icon->setImageRecolor(lv_palette_lighten(LV_PALETTE_RED, 1));
+                return;
+
+            case stackchan::WifiLink::Connected: {
+                _wifi_icon->setImageRecolor(lv_color_hex(_color_primary));
+                // Same thresholds Hal::getWifiStatus() uses, so the two agree rather
+                // than each inventing its own idea of a good signal.
+                const int8_t rssi = stackchan::WifiRssiDbm();
+                _wifi_icon->setSrc(rssi >= -65   ? &_icon_wifi_high
+                                   : rssi >= -75 ? &_icon_wifi_medium
+                                                 : &_icon_wifi_low);
+                return;
+            }
         }
     }
 
@@ -275,24 +292,35 @@ private:
     lv_image_dsc_t _icon_wifi_medium;
     lv_image_dsc_t _icon_wifi_high;
     lv_image_dsc_t _icon_wifi_slash;
+    uint32_t _color_primary = 0;
 };
 
 /**
- * @brief Transport link indicator: which protocol, and whether a host is on it.
+ * @brief Gateway indicator: WHICH ROAD the connected host came in on.
  *
- * Sits at the far left, where the eye lands first. The Wifi widget next to it reports
- * the radio, which is silent on a USB build -- this reports the thing that actually
- * carries the conversation, and without it "why is nothing happening" has no answer
- * short of attaching a serial cable.
+ * Sits at the far left, where the eye lands first. The Wifi widget beside it reports
+ * the radio; this reports the thing that actually carries the conversation, and the
+ * two are genuinely independent -- WiFi can be associated while the agent is attached
+ * over the cable, and that combination used to be indistinguishable from any other.
  *
- * The status bar auto-hides, so this is the *detail* view; the persistent signal is the
- * idle LED going pale red (see StackChanAvatarDisplay::UpdateStatusBar).
+ * A pictogram rather than the old "USB ×" text, because the text was compiled from
+ * CONNECTION_TYPE_* and said "USB" for a client that had arrived over WiFi. One
+ * listener is bound to INADDR_ANY and serves every interface, so the label was not
+ * merely terse, it was wrong. hal_bridge::gateway_link() reads the live socket's peer
+ * address instead.
+ *
+ * The status bar auto-hides, so this is the *detail* view; the persistent at-a-glance
+ * signal remains the idle LED going pale red (StackChanAvatarDisplay::UpdateStatusBar),
+ * which is deliberately left alone.
  */
-class Link : public Widget {
+class Gateway : public Widget {
 public:
-    Link(lv_obj_t* parent, uint32_t colorPrimary)
+    Gateway(lv_obj_t* parent, uint32_t colorPrimary)
     {
         _label = std::make_unique<Label>(parent);
+        // Montserrat carries LVGL's built-in symbol range, so these need no extra font
+        // and no new image asset in the mmap partition -- which matters, because the
+        // asset pipeline is a build step and this is a status glyph.
         _label->setTextFont(&lv_font_montserrat_16);
         _label->align(LV_ALIGN_LEFT_MID, 11, 0);
         _colorPrimary = colorPrimary;
@@ -301,26 +329,48 @@ public:
 
     void update() override
     {
-        bool connected = hal_bridge::is_host_connected();
-        if (connected == _last_connected && _label_set) {
+        const auto link = hal_bridge::gateway_link();
+        if (link == _last_link && _drawn) {
             return;
         }
-        _last_connected = connected;
-        _label_set      = true;
+        _last_link = link;
+        _drawn     = true;
 
-        _label->setText(fmt::format("{}{}", hal_bridge::transport_label(),
-                                    connected ? "" : " ×"));
-        // Pale red rather than a hard red: an unattended robot with no host is waiting,
-        // not broken, and should not look like it is throwing an error.
-        _label->setTextColor(connected ? lv_color_hex(_colorPrimary)
-                                       : lv_palette_lighten(LV_PALETTE_RED, 1));
+        switch (link) {
+            case hal_bridge::GatewayLink::None:
+                // Pale red, not hard red: an unattended robot with no host is waiting,
+                // not broken, and must not look like it is throwing an error.
+                _label->setText(LV_SYMBOL_CLOSE);
+                _label->setTextColor(lv_palette_lighten(LV_PALETTE_RED, 1));
+                return;
+
+            case hal_bridge::GatewayLink::Usb:
+                _label->setText(LV_SYMBOL_USB);
+                _label->setTextColor(lv_color_hex(_colorPrimary));
+                return;
+
+            case hal_bridge::GatewayLink::Wifi:
+                _label->setText(LV_SYMBOL_WIFI);
+                _label->setTextColor(lv_color_hex(_colorPrimary));
+                return;
+
+            case hal_bridge::GatewayLink::Vpn:
+                // SHUFFLE is the least-bad glyph in LVGL's built-in set for "routed
+                // through somewhere else", which is what a tailnet is. There is no
+                // lock or shield in the built-in range, and pulling in a whole extra
+                // font for one icon on a feature parked at P2 is not a trade worth
+                // making. Revisit if the tailnet ships.
+                _label->setText(LV_SYMBOL_SHUFFLE);
+                _label->setTextColor(lv_color_hex(_colorPrimary));
+                return;
+        }
     }
 
 private:
     std::unique_ptr<Label> _label;
     uint32_t _colorPrimary = 0;
-    bool _last_connected   = false;
-    bool _label_set        = false;
+    hal_bridge::GatewayLink _last_link = hal_bridge::GatewayLink::None;
+    bool _drawn = false;
 };
 
 class StatusBarView {
@@ -340,7 +390,7 @@ public:
         _widgets.push_back(std::make_unique<TimeLabel>(_panel->get(), colorPrimary));
         _widgets.push_back(std::make_unique<Battery>(_panel->get(), colorSecondary, colorPrimary));
         _widgets.push_back(std::make_unique<Wifi>(_panel->get(), colorPrimary));
-        _widgets.push_back(std::make_unique<Link>(_panel->get(), colorPrimary));
+        _widgets.push_back(std::make_unique<Gateway>(_panel->get(), colorPrimary));
 
         _panel->setPos(0, _pos_y_hide);
         _pos_y_anim.springOptions().bounce         = 0.1;
