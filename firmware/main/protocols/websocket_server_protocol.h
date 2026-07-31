@@ -116,6 +116,22 @@ private:
     // POST /debug/reset -- drop the client and force the state machine back to idle,
     // for when the device is unreachable by hand. Does not reboot; the log is evidence.
     static esp_err_t DebugResetHandler(httpd_req_t* req);
+
+    // GET /debug/logs -- the recent ESP_LOG scrollback as plain text, oldest first.
+    // The CDC console dies with a panic and does not exist without a cable; this
+    // survives both, and works over the tailnet because httpd binds INADDR_ANY.
+    static esp_err_t DebugLogsHandler(httpd_req_t* req);
+
+    // POST /debug/download-mode -- reboot straight into the ROM serial bootloader.
+    //
+    // Removes the human from the flash loop. Normally entering download mode needs a
+    // physical 3-second RST hold, because once the app is up TinyUSB owns GPIO19/20
+    // and the USB-Serial-JTAG peripheral esptool would talk to no longer exists.
+    // Setting RTC_CNTL_FORCE_DOWNLOAD_BOOT before esp_restart() makes the ROM come up
+    // in download mode instead of the app, which frees those pins again -- so esptool
+    // can connect on its own.
+    static esp_err_t DebugDownloadModeHandler(httpd_req_t* req);
+
     static void OnClientClosed(httpd_handle_t hd, int sockfd);
     static void SendHelloWork(void* arg);
 

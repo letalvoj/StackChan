@@ -14,9 +14,13 @@
 #include "application.h"
 #include "device_state_machine.h"
 #include "hal/board/hal_bridge.h"
+#include "hal/board/log_ring.h"
+#include "hal/board/network_link.h"
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <soc/rtc_cntl_reg.h>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -132,6 +136,32 @@ bool WebsocketServerProtocol::Start() {
         ESP_LOGW(TAG, "could not register /debug/reset");
     }
 
+    const httpd_uri_t logs_uri = {
+        .uri          = "/debug/logs",
+        .method       = HTTP_GET,
+        .handler      = DebugLogsHandler,
+        .user_ctx     = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol    = nullptr,
+    };
+    if (httpd_register_uri_handler(server_, &logs_uri) != ESP_OK) {
+        ESP_LOGW(TAG, "could not register /debug/logs");
+    }
+
+    const httpd_uri_t dl_uri = {
+        .uri          = "/debug/download-mode",
+        .method       = HTTP_POST,
+        .handler      = DebugDownloadModeHandler,
+        .user_ctx     = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol    = nullptr,
+    };
+    if (httpd_register_uri_handler(server_, &dl_uri) != ESP_OK) {
+        ESP_LOGW(TAG, "could not register /debug/download-mode");
+    }
+
     const esp_timer_create_args_t hello_args = {
         .callback = SendHelloWork,
         .arg = this,
@@ -219,6 +249,19 @@ void WebsocketServerProtocol::DropClient(bool notify) {
     }
 }
 
+namespace {
+
+// lwIP names its task "tiT". Looked up by name rather than cached at startup
+// because this transport does not create it and has no handle to it; the lookup is
+// cheap and /debug is polled by hand, not in a hot path. Returns 0 if the task
+// cannot be found, which reads as "unknown", not as "no stack left".
+unsigned long TcpipTaskStackFreeMin() {
+    TaskHandle_t tit = xTaskGetHandle("tiT");
+    return tit != nullptr ? (unsigned long)uxTaskGetStackHighWaterMark(tit) : 0;
+}
+
+}  // namespace
+
 esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
     auto self = static_cast<WebsocketServerProtocol*>(req->user_ctx);
 
@@ -249,7 +292,22 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
         "\"send_failures\":%lu,"
         "\"last_send_err\":\"%s\","
         "\"heap_free\":%lu,"
-        "\"heap_min\":%lu"
+        "\"heap_min\":%lu,"
+        // Empty until WiFi associates, and empty forever if WiFi is not enabled.
+        // Reported here because there is nowhere else to read it: once the app is
+        // running TinyUSB owns the USB pins, so the serial console this would
+        // otherwise be logged to does not exist. Without it, finding the device on
+        // the LAN means sweeping the subnet.
+        "\"wifi_ip\":\"%s\","
+        // Lowest the lwIP task's free stack has EVER been, in bytes -- not its
+        // current depth. This exists because 3072 (ESP-IDF's stock default) silently
+        // overflowed once WiFi joined USB-NCM on the same task, and the only signal
+        // was an intermittent post-boot crash. Sizing this stack by argument is
+        // guesswork; sizing it by watching this number approach zero is not.
+        //
+        // Watch it in particular when adding a netif: WireGuard runs its handshake
+        // crypto (X25519, blake2s HMAC) in lwIP's context, on this stack.
+        "\"tcpip_stack_free_min\":%lu"
         "}",
         (unsigned long)(esp_timer_get_time() / 1000000),
         FIRMWARE_VERSION,
@@ -266,7 +324,9 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
         (unsigned long)(self ? self->send_failures_.load() : 0),
         esp_err_to_name(self ? self->last_send_err_.load() : 0),
         (unsigned long)esp_get_free_heap_size(),
-        (unsigned long)esp_get_minimum_free_heap_size());
+        (unsigned long)esp_get_minimum_free_heap_size(),
+        stackchan::WifiIpAddress().c_str(),
+        (unsigned long)TcpipTaskStackFreeMin());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -312,6 +372,77 @@ esp_err_t WebsocketServerProtocol::DebugResetHandler(httpd_req_t* req) {
                      DeviceStateMachine::GetStateName(app.GetDeviceState()));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n > 0 ? n : 0);
+}
+
+esp_err_t WebsocketServerProtocol::DebugLogsHandler(httpd_req_t* req) {
+    // Chunked rather than one buffer: the ring is 16 KB and a single stack
+    // allocation that size on the httpd task is a good way to manufacture the exact
+    // internal-RAM problem this project has spent a session fighting. PSRAM for the
+    // scratch copy, for the same reason.
+    constexpr size_t kChunk = 2048;
+    char* buf = static_cast<char*>(heap_caps_malloc(kChunk, MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return ESP_FAIL;
+    }
+
+    // Snapshot once into PSRAM, then stream it out. Taking one consistent snapshot
+    // beats reading the ring repeatedly while it is still being written to.
+    const size_t total = stackchan::LogRing::Size();
+    char* snap = static_cast<char*>(heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM));
+    if (snap == nullptr) {
+        heap_caps_free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+        return ESP_FAIL;
+    }
+    const size_t n = stackchan::LogRing::Snapshot(snap, total + 1);
+
+    httpd_resp_set_type(req, "text/plain");
+    for (size_t off = 0; off < n; off += kChunk) {
+        const size_t len = (n - off < kChunk) ? (n - off) : kChunk;
+        memcpy(buf, snap + off, len);
+        if (httpd_resp_send_chunk(req, buf, len) != ESP_OK) {
+            break;
+        }
+    }
+    httpd_resp_send_chunk(req, nullptr, 0);   // terminate the chunked response
+
+    heap_caps_free(snap);
+    heap_caps_free(buf);
+    return ESP_OK;
+}
+
+esp_err_t WebsocketServerProtocol::DebugDownloadModeHandler(httpd_req_t* req) {
+    ESP_LOGW(TAG, "/debug/download-mode -- rebooting into the ROM serial bootloader");
+
+    const char* body = "{\"rebooting_into\":\"download-mode\"}";
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, strlen(body));
+
+    // Reboot from a timer, not from here: esp_restart() inside the handler kills the
+    // socket before the response leaves, so the caller sees a connection reset and
+    // cannot tell "it worked" from "it crashed".
+    static esp_timer_handle_t dl_timer = nullptr;
+    if (dl_timer == nullptr) {
+        const esp_timer_create_args_t args = {
+            .callback = [](void*) {
+                // Survives the reset and tells the ROM to enter the serial bootloader
+                // instead of loading the app -- which is what frees GPIO19/20 back to
+                // USB-Serial-JTAG so esptool has something to talk to.
+                REG_SET_BIT(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+                esp_restart();
+            },
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "dl_mode",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &dl_timer) != ESP_OK) {
+            return ESP_OK;   // response already sent; nothing useful left to say
+        }
+    }
+    esp_timer_start_once(dl_timer, 250 * 1000);   // 250 ms: time for the reply to flush
+    return ESP_OK;
 }
 
 esp_err_t WebsocketServerProtocol::WsHandler(httpd_req_t* req) {
