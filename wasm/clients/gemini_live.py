@@ -299,7 +299,13 @@ TOOLS = [
                 "any wording like 'your left' gets mirrored into the opposite motion. "
                 "Verified on hardware -- yaw -120 physically turns to the viewer's left. "
                 "PITCH 0..90, where 90 is up. Stay within +/-45 yaw for normal "
-                "conversation. Speed 100-1000, 150 is natural, 700 is excited."
+                "conversation. Speed 100-1000, 150 is natural, 700 is excited. "
+                "THIS IS A REAL NECK ON REAL SERVOS AND IT IS SLOW: the call does not "
+                "return until the head has physically arrived, which takes up to a "
+                "second for a large move. If you want to look somewhere and then act on "
+                "what is there -- above all take_photo -- move FIRST, wait for this to "
+                "return, and only then take the photo. A photo taken too early shows "
+                "where you used to be pointing, not where you just looked."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
@@ -353,8 +359,28 @@ TOOLS = [
                 "Look through your camera and see what is in front of you. Use this "
                 "whenever you are asked to look at something, or what you can see. "
                 "The image is given to you directly -- after calling this, describe "
-                "what you actually observe. If the subject is off to one side, point "
-                "your head with set_head_angles first, then take the photo."
+                "what you actually observe. If the subject is off to one side, or you "
+                "were asked to look somewhere and photograph it, call set_head_angles "
+                "FIRST AND WAIT FOR IT TO RETURN, then take the photo. That call blocks "
+                "until the neck has physically arrived; the camera is bolted to the "
+                "head, so a photo taken before it stops shows the old direction."
+            ),
+            parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="end_conversation",
+            description=(
+                "End the conversation and go back to sleep. They can wake you again "
+                "with a tap on your face, so this is a goodbye, not a shutdown. "
+                "Say your farewell FIRST and call this in the same turn -- the session "
+                "closes only once you have finished speaking, so nothing you say is "
+                "cut off, but a goodbye you never said will not be heard. "
+                "Call it when they say goodbye, goodnight, 'that's all', 'talk later', "
+                "'leave me alone', or otherwise clearly signal they are finished with "
+                "you -- including a plain 'thanks, bye'. "
+                "DO NOT call it because a topic wrapped up, because you ran out of "
+                "things to say, or because nobody has spoken for a while. Silence is a "
+                "person thinking, and hanging up on them is far worse than waiting."
             ),
             parameters=types.Schema(type=types.Type.OBJECT, properties={}),
         ),
@@ -491,6 +517,7 @@ MCP_NAMES = {
     "get_device_status": "self.get_device_status",
     "set_volume": "self.audio_speaker.set_volume",
     "set_brightness": "self.screen.set_brightness",
+    "end_conversation": "self.robot.end_conversation",
 }
 
 # The firmware's "leave this axis alone" sentinel. Sending a real angle for an axis
@@ -547,6 +574,9 @@ class Device:
         # enqueue_audio. Without it, clearing the queue only buys a moment of quiet
         # before the rest of the generated turn refills it.
         self.barged_in = False
+        # Set when the agent calls end_conversation; acted on by pace() once the
+        # goodbye has finished playing, never before.
+        self.hangup_pending = False
         # Set while pace() has a tts:start outstanding, so a barge-in knows whether
         # there is anything to interrupt. Read from the pump, written by pace().
         self.speaking = False
@@ -789,6 +819,14 @@ class Device:
                     await self.ws.send(json.dumps({"session_id": self.session_id,
                                                    "type": "tts", "state": "stop"}))
                     self.speaking = False
+                    # The agent asked to hang up. This is the ONLY correct moment to
+                    # act on it: the goodbye has now been sent in full. Acting when the
+                    # tool was called would close the session while the farewell was
+                    # still sitting in this queue, so the robot would go silent
+                    # mid-sentence -- the exact opposite of a graceful goodbye.
+                    if self.hangup_pending:
+                        self.hangup_pending = False
+                        asyncio.create_task(self._hangup_after_speech())
                     # Headroom report, once per turn. Distortion is hard to attribute
                     # by ear -- digital clipping, an overdriven speaker and aliasing
                     # all sound "crackly" -- so print the one number that separates
@@ -823,6 +861,27 @@ class Device:
     async def _preroll_wait(self):
         while self.tx.qsize() < PREROLL_FRAMES:
             await asyncio.sleep(0.01)
+
+    async def _hangup_after_speech(self):
+        """Close the session, once the last of the goodbye has actually been heard.
+
+        `tts stop` marks the end of the STREAM, not the end of the SOUND. Pacing keeps
+        a pre-roll of frames buffered on the device precisely so playback never
+        underruns, so at this point the speaker is still working through them. Ending
+        the session now would clip the final word -- and on a goodbye that is the word
+        that matters.
+
+        Wait out the buffer plus a margin, then hang up. Deliberately in its own task:
+        pace() must stay free to carry the next turn if the person says something in
+        the gap, which is also why a late barge-in simply wins -- the device reopens
+        the turn and this call finds nothing left to close.
+        """
+        await asyncio.sleep(PREROLL_FRAMES * self.codec.frame_ms / 1000.0 + 0.4)
+        try:
+            await self.call("self.robot.end_conversation", {}, timeout=5.0)
+            print("👋 session closed by the agent -- tap the face to wake it", flush=True)
+        except Exception as exc:
+            print(f"  ⚠ end_conversation failed: {type(exc).__name__}", flush=True)
 
     async def end_turn(self):
         await self.flush_audio()
@@ -952,6 +1011,17 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
             response={"result": "Photo captured. The image is being sent to you now -- "
                                 "wait for it, then describe what is actually in it."})
 
+    if call.name == "end_conversation":
+        # Latched, NOT called. The MCP call goes out from pace() once the goodbye has
+        # actually been spoken -- see _hangup_after_speech. Closing the session here
+        # would cut the farewell off mid-word, since it is still queued at this point.
+        device.hangup_pending = True
+        print("  👋 goodbye — closing the session after this turn", flush=True)
+        return types.FunctionResponse(
+            id=call.id, name=call.name,
+            response={"result": "Say your goodbye now; the session closes when you "
+                                "finish speaking."})
+
     if call.name == "set_head_angles":
         args = {"yaw": int(args.get("yaw", LEAVE_ALONE)),
                 "pitch": int(args.get("pitch", LEAVE_ALONE)),
@@ -1033,10 +1103,18 @@ async def converse(device: Device, session):
         }
         # A single stroke fires repeatedly. Gather what arrives in this window and treat
         # it as one touch, otherwise "coalescing" is just a different word for spam.
-        COALESCE_S = 1.2
+        COALESCE_S = 0.8
         # Minimum gap between two touch-triggered replies. Long enough that a child
         # rubbing the robot's head continuously gets one reaction, then a listener.
-        COOLDOWN_S = 20.0
+        # 12s rather than the original 20s: with the wait-for-a-gap loop below, a touch
+        # now reliably produces SOMETHING, so the cooldown is the only thing standing
+        # between a child and a reaction, and 20s felt broken rather than restrained.
+        COOLDOWN_S = 12.0
+        # How long to keep looking for a gap before giving up and filing the touch as
+        # context. About the length of a sentence -- long enough to outlast the tail of
+        # a reply or a VAD twitch, short enough that the reaction still belongs to the
+        # touch that caused it.
+        ANSWER_WAIT_S = 6.0
         last_reply = 0.0
 
         while True:
@@ -1057,15 +1135,38 @@ async def converse(device: Device, session):
             if not notes:
                 continue
 
-            # Quiet means: not mid-utterance, nothing queued to play, and the person is
-            # not currently talking. Anything else and a forced turn would talk over
-            # somebody.
-            quiet = (not device.speaking and device.tx.empty()
-                     and not device.voice_active and not device.barged_in)
+            def quiet_now():
+                """Nothing to talk over: not mid-utterance, nothing queued, nobody speaking."""
+                return (not device.speaking and device.tx.empty()
+                        and not device.voice_active and not device.barged_in)
+
             now = asyncio.get_running_loop().time()
-            answer = quiet and (now - last_reply) > COOLDOWN_S
+            cooled = (now - last_reply) > COOLDOWN_S
+
+            # WAIT for a quiet moment instead of testing for one once.
+            #
+            # Testing once is what made petting feel dead. The check ran the instant the
+            # coalescing window closed, and if anything was momentarily true -- the tail
+            # of a reply still draining, or device VAD twitching at room noise, which it
+            # does constantly with a person sitting in front of it -- the note went out
+            # as turn_complete=False and was then FORGOTTEN. Nothing ever revisited it,
+            # so the robot simply never reacted, and the note surfaced minutes later
+            # attached to an unrelated answer.
+            #
+            # A stroke lasts seconds. Spending a few of them looking for a gap is both
+            # cheap and much closer to what the person actually expects: they keep
+            # rubbing its head until it notices.
+            answer = False
+            if cooled:
+                deadline = now + ANSWER_WAIT_S
+                while asyncio.get_running_loop().time() < deadline:
+                    if quiet_now():
+                        answer = True
+                        break
+                    await asyncio.sleep(0.15)
+
             if answer:
-                last_reply = now
+                last_reply = asyncio.get_running_loop().time()
 
             try:
                 await session.send_client_content(
@@ -1075,6 +1176,12 @@ async def converse(device: Device, session):
                 )
                 if answer:
                     print("  ✋ → answering the touch", flush=True)
+                else:
+                    # Say WHY it stayed quiet. Without this the difference between "on
+                    # cooldown" and "never found a gap" is invisible, and those want
+                    # opposite fixes.
+                    why = "cooldown" if not cooled else "no gap in the conversation"
+                    print(f"  ✋ noted, not answering ({why})", flush=True)
             except Exception as exc:
                 print(f"  ⚠ sensor note dropped: {type(exc).__name__}", flush=True)
 

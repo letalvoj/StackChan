@@ -57,7 +57,12 @@ void Hal::xiaozhi_mcp_init()
                        "3. Max ranges: Yaw(-128 to 128; NEGATIVE turns toward the LEFT of "
                        "the person facing you, POSITIVE toward their RIGHT), "
                        "Pitch(0 to 90, 90 is up). "
-                       "Speed(100-1000, 150 is natural).",
+                       "Speed(100-1000, 150 is natural). "
+                       "4. This is a real neck on real servos: it returns at once, but "
+                       "the head keeps moving for up to a second afterwards. To look "
+                       "somewhere and photograph it, call this first and then take the "
+                       "photo -- the camera waits for the head to stop by itself, so "
+                       "you do not need to pause or check.",
                        PropertyList({Property("yaw", kPropertyTypeInteger, -9999, -9999, 128),
                                      Property("pitch", kPropertyTypeInteger, -9999, -9999, 90),
                                      Property("speed", kPropertyTypeInteger, 150, 100, 1000)}),
@@ -68,16 +73,52 @@ void Hal::xiaozhi_mcp_init()
 
                            mclog::tagInfo(_tag, "motion set_angles: yaw: {}, pitch: {}, speed: {}", yaw, pitch, speed);
 
-                           LvglLockGuard lock;
-
-                           auto& motion = GetStackChan().motion();
-                           if (pitch != -9999) {
-                               motion.pitchServo().moveWithSpeed(pitch * 10, speed);
+                           {
+                               LvglLockGuard lock;
+                               auto& motion = GetStackChan().motion();
+                               if (pitch != -9999) {
+                                   motion.pitchServo().moveWithSpeed(pitch * 10, speed);
+                               }
+                               if (yaw != -9999) {
+                                   motion.yawServo().moveWithSpeed(yaw * 10, speed);
+                               }
                            }
-                           if (yaw != -9999) {
-                               motion.yawServo().moveWithSpeed(yaw * 10, speed);
-                           }
 
+                           // RETURNS IMMEDIATELY, and must keep doing so.
+                           //
+                           // This once blocked until the head physically arrived, to
+                           // stop "look up and take a photo" photographing the old
+                           // direction. It worked, and it broke conversation: MCP
+                           // handlers run on the httpd task, which is the same task
+                           // that receives audio frames. The model moves its head
+                           // constantly while talking, so every move froze the
+                           // protocol for up to three seconds, the client's sends
+                           // blocked behind a full TCP window, and the turn never
+                           // closed -- the robot sat with a talking face and no sound.
+                           //
+                           // The ordering requirement is real, but it belongs at the
+                           // CAMERA, which waits for the head to settle before it
+                           // captures. Photos are rare and slow already; head movement
+                           // is continuous and on the audio path. Block the rare one.
+                           return true;
+                       });
+
+    mclog::tagInfo(_tag, "add robot.end_conversation tool");
+    mcp_server.AddTool("self.robot.end_conversation",
+                       "Close the voice session and go back to sleep, as if the person had "
+                       "tapped your face to end it. They can always wake you again with a "
+                       "tap. Call this ONLY when the conversation is genuinely over -- when "
+                       "they say goodbye, goodnight, 'that's all', 'leave me alone', 'talk "
+                       "later', or clearly signal they are done with you. Say your goodbye "
+                       "FIRST and call this immediately after, in the same turn: the session "
+                       "closes once you finish speaking, so a farewell you have not said yet "
+                       "will not be heard. NEVER call it merely because a topic ended or "
+                       "there was a pause -- silence is someone thinking, and hanging up on "
+                       "them is worse than waiting.",
+                       PropertyList(),
+                       [this](const PropertyList& properties) -> ReturnValue {
+                           mclog::tagInfo(_tag, "end_conversation requested by the agent");
+                           hal_bridge::end_conversation();
                            return true;
                        });
 
@@ -224,6 +265,45 @@ void Hal::xiaozhi_mcp_init()
                                throw std::runtime_error("No camera on this board");
                            }
                            const bool stream = properties["stream"].value<bool>();
+
+                           // WAIT FOR THE HEAD TO STOP before capturing.
+                           //
+                           // The camera is bolted to the head, and "look up and take a
+                           // photo" is two tool calls the model fires back to back --
+                           // so without this the shutter reliably caught the neck
+                           // mid-travel and returned a photo of wherever it used to be
+                           // pointing. Prompting cannot fix that: from the model's side
+                           // the move genuinely had succeeded.
+                           //
+                           // Here rather than in set_head_angles, which tried it first
+                           // and starved the audio path (see that tool). This handler
+                           // already runs long -- a sensor read plus a JPEG encode --
+                           // and already drops its own priority so as not to starve
+                           // audio, so a short wait costs nothing that was not already
+                           // being spent.
+                           //
+                           // Skipped for `stream`: continuous frames are gated on
+                           // speech, not on aiming, and pausing each one on servo
+                           // motion would stutter the video for no benefit.
+                           if (!stream) {
+                               // NO LvglLockGuard in this loop, deliberately. The first
+                               // version took it on every poll, 50 times a second, and
+                               // that contention with the rendering task made touches
+                               // and gestures visibly lag -- a UI freeze traded for a
+                               // photo fix. isMoving() reads two bools; the worst a
+                               // torn read can do is cost one more 50 ms poll.
+                               constexpr int kPollMs    = 50;
+                               constexpr int kMaxWaitMs = 1500;
+                               for (int waited = 0; waited < kMaxWaitMs; waited += kPollMs) {
+                                   if (!GetStackChan().motion().isMoving()) {
+                                       break;
+                                   }
+                                   vTaskDelay(pdMS_TO_TICKS(kPollMs));
+                               }
+                               // No error on timeout: a head held by a hand is normal
+                               // life for a desk robot, and a photo taken anyway is far
+                               // better than a failed tool call the model apologises for.
+                           }
 
                            // Capture runs at lowered priority upstream; keep that -- the
                            // sensor read is long and must not starve audio.
