@@ -24,10 +24,28 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "clients"))
 
+import gemini_live as G
 from gemini_live import FULL_SCALE, Downsampler  # noqa: E402
 
 SRC_RATE, DST_RATE = 24000, 16000
 NYQUIST = DST_RATE / 2
+
+
+@pytest.fixture(autouse=True)
+def no_agc():
+    """Auto-gain is module-level and defaults on, since only main() ever flips it.
+
+    Every test above this fixture measures the FILTER -- passband flatness, alias
+    rejection, the limiter -- and auto-gain moving the signal underneath a
+    measurement is a second variable these tests are not supposed to have. It
+    happened to still pass with AGC live (the rejection margins are ~50 dB), which
+    is worse than failing: a real regression could hide behind gain drift the same
+    way. AGC gets its own tests below, with this fixture bypassed explicitly.
+    """
+    old = G.AGC_ENABLED
+    G.AGC_ENABLED = False
+    yield
+    G.AGC_ENABLED = old
 
 
 def tone(freq, n, rate=SRC_RATE, amp=12000):
@@ -108,5 +126,65 @@ def test_reset_clears_history_but_keeps_levels():
     d.reset()
     assert d.peak == peak_before
     assert d.n_in == 0 and not d.buf
-    peak, _ = d.take_levels()
+    peak, _, _ = d.take_levels()
     assert peak > 0.9 and d.peak == 0
+
+
+# --------------------------------------------------------------------------- AGC
+#
+# no_agc above is bypassed in every test below -- these ARE the auto-gain tests.
+
+def with_agc(fn):
+    """Run fn with AGC forced on, regardless of the no_agc fixture's default."""
+    old = G.AGC_ENABLED
+    G.AGC_ENABLED = True
+    try:
+        return fn()
+    finally:
+        G.AGC_ENABLED = old
+
+
+def test_agc_boosts_quiet_speech():
+    """A quiet voice should climb toward the target ceiling over a few blocks.
+
+    10% of full scale is a plausible quiet TTS level; left unboosted it would play
+    back noticeably softer than before the aliasing fix removed the extra
+    brightness that used to read as loudness -- see Downsampler's docstring.
+    """
+    def run():
+        d = Downsampler(SRC_RATE, DST_RATE)
+        for _ in range(30):
+            d.feed(tone(300, 1440, amp=int(0.10 * FULL_SCALE)))
+        return d.agc_gain
+    gain = with_agc(run)
+    assert gain > 2.0, f"expected a quiet voice to be boosted well above unity, got {gain:.2f}x"
+
+
+def test_agc_does_not_boost_loud_speech():
+    """Already-loud speech must not be pushed louder -- that is what clips it."""
+    def run():
+        d = Downsampler(SRC_RATE, DST_RATE)
+        for _ in range(10):
+            d.feed(tone(300, 1440, amp=int(0.90 * FULL_SCALE)))
+        return d.agc_gain
+    gain = with_agc(run)
+    assert gain <= 1.05, f"expected loud speech to stay near unity gain, got {gain:.2f}x"
+
+
+def test_agc_gain_is_bounded():
+    """Silence must not be amplified into a hiss, and gain must never invert phase."""
+    def run():
+        d = Downsampler(SRC_RATE, DST_RATE)
+        for _ in range(40):
+            d.feed(tone(300, 1440, amp=1))       # near silence
+        return d.agc_gain
+    gain = with_agc(run)
+    assert 0 < gain <= G.AGC_MAX_GAIN + 1e-9
+
+
+def test_agc_disabled_holds_unity_gain():
+    """GEMINI_API_AGC=0 must genuinely disable boosting, not just relabel it."""
+    d = Downsampler(SRC_RATE, DST_RATE)          # no_agc fixture: AGC_ENABLED False
+    for _ in range(30):
+        d.feed(tone(300, 1440, amp=int(0.10 * FULL_SCALE)))
+    assert d.agc_gain == 1.0

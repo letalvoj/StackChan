@@ -81,6 +81,20 @@ FULL_SCALE = 32767.0
 SOFT_KNEE = FULL_SCALE * 0.80
 OUTPUT_GAIN = 1.0               # overridden from env in main()
 
+# Auto-gain. Fixing the aliasing (see Downsampler) took real energy above 8 kHz out
+# of the signal along with the alias artifacts -- and that energy, alias or not, was
+# most of what made speech sound loud. The honest fix for loudness is gain, not
+# distortion, so rather than hand-tune OUTPUT_GAIN per voice this tracks how loud
+# recent speech actually was and boosts quiet passages toward the ceiling on its
+# own. The soft limiter is still the safety net for anything faster than the
+# envelope has caught up to -- a sudden loud transient can outrun a smoothed
+# average by design, and that is what the limiter is for.
+AGC_TARGET     = 0.92    # fraction of full scale the envelope is steered toward
+AGC_MIN_GAIN   = 0.6     # never push already-loud speech down further
+AGC_MAX_GAIN   = 3.0     # cap on quiet-passage boost, so hiss cannot run away
+AGC_RELEASE    = 0.90    # envelope decay per feed() call (~60 ms of audio)
+AGC_ENABLED    = True    # overridden from env in main()
+
 
 # --------------------------------------------------------------------------- env
 
@@ -162,6 +176,11 @@ class Downsampler:
         self.h = [v * self.L for v in _lowpass(self.TAPS, src_rate * self.L, self.CUTOFF)]
         self.peak = 0                 # |sample| high-water mark, for headroom checks
         self.clipped = 0              # samples the limiter had to round off
+        # Neutral (gain 1.0) until real audio has informed it -- starting from 0 would
+        # read the first, quietest block as silence and slam the gain to AGC_MAX_GAIN
+        # before there is any signal to justify it.
+        self._envelope = AGC_TARGET * FULL_SCALE
+        self.agc_gain = 1.0
         self.reset()
 
     def reset(self):
@@ -176,11 +195,11 @@ class Downsampler:
         self.n_in = 0
         self.n_out = 0
 
-    def take_levels(self) -> tuple[float, int]:
-        """Peak as a fraction of full scale, and how many samples were limited."""
+    def take_levels(self) -> tuple[float, int, float]:
+        """Peak as a fraction of full scale, samples limited, and the current AGC gain."""
         peak, clipped = self.peak / FULL_SCALE, self.clipped
         self.peak = self.clipped = 0
-        return peak, clipped
+        return peak, clipped, self.agc_gain
 
     def feed(self, pcm: bytes) -> bytes:
         """One block in, whole samples out. 1440 in -> exactly 960 out, always."""
@@ -211,11 +230,24 @@ class Downsampler:
             del self.buf[:need - self.base]
             self.base = need
 
+        if AGC_ENABLED and out:
+            # Measured on the filtered signal BEFORE any gain -- the envelope must
+            # track what the source actually contains, not last block's already-boosted
+            # output, or the loop would compound its own gain onto itself.
+            block_peak = max(abs(v) for v in out)
+            # Attack instantly on a louder block (a sudden quiet-to-loud jump should not
+            # clip while the envelope catches up); release slowly on a quieter one,
+            # so a single soft syllable does not un-boost the whole passage around it.
+            self._envelope = (block_peak if block_peak > self._envelope
+                              else self._envelope * AGC_RELEASE + block_peak * (1 - AGC_RELEASE))
+            wanted = AGC_TARGET * FULL_SCALE / max(self._envelope, 1.0)
+            self.agc_gain = min(max(wanted, AGC_MIN_GAIN), AGC_MAX_GAIN)
+
         return self._to_pcm(out)
 
     def _to_pcm(self, samples: list[float]) -> bytes:
         """Gain, soft limit, clamp -- and keep score."""
-        gain, out = OUTPUT_GAIN, []
+        gain, out = OUTPUT_GAIN * self.agc_gain, []
         for v in samples:
             v *= gain
             a = abs(v)
@@ -329,15 +361,19 @@ TOOLS = [
         types.FunctionDeclaration(
             name="play_sound",
             description=(
-                "Play a short sound effect: success, exclamation, popup, welcome, "
-                "vibration. A chirp lands where a spoken 'ta-da' is just more talking. "
-                "Punctuation, not decoration -- never on every turn."
+                "Play a short sound effect: success, exclamation, popup, vibration. "
+                "A chirp lands where a spoken 'ta-da' is just more talking. "
+                "Punctuation, not decoration -- never on every turn. "
+                # NOT 'welcome': that name is a translated, prerecorded human voice
+                # clip (37 locale files, ~1.7s -- every other sound here is one
+                # locale-independent chime a third the length). It talks over you in
+                # a voice that has nothing to do with yours. Never call it.
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={"name": types.Schema(
                     type=types.Type.STRING,
-                    description="success, exclamation, popup, welcome or vibration")},
+                    description="success, exclamation, popup or vibration")},
                 required=["name"],
             ),
         ),
@@ -759,10 +795,11 @@ class Device:
                     # them. A peak below 1.0 with nothing limited means the level is
                     # innocent and the buzz is somewhere else.
                     if self._down is not None:
-                        peak, clipped = self._down.take_levels()
+                        peak, clipped, gain = self._down.take_levels()
                         if peak:
                             note = f" ⚠ {clipped} limited" if clipped else ""
-                            print(f"  🔊 peak {peak:.2f} FS{note}", flush=True)
+                            gain_note = f" gain x{gain:.2f}" if AGC_ENABLED else ""
+                            print(f"  🔊 peak {peak:.2f} FS{gain_note}{note}", flush=True)
                 deadline = None
                 continue
 
@@ -1192,11 +1229,13 @@ async def main():
 
     # Module-level because the resampler reads it per sample and an attribute lookup
     # per sample is not free in pure Python. Set once, before any audio flows.
-    global OUTPUT_GAIN
+    global OUTPUT_GAIN, AGC_ENABLED
     try:
         OUTPUT_GAIN = float(os.environ.get("GEMINI_API_OUTPUT_GAIN", "1.0"))
     except ValueError:
         sys.exit("GEMINI_API_OUTPUT_GAIN must be a number, e.g. 0.8")
+    AGC_ENABLED = os.environ.get("GEMINI_API_AGC", "1").lower() not in (
+        "0", "false", "no", "off", "")
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
