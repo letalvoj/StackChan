@@ -63,5 +63,9 @@ obj/
 
 sdkconfig
 sdkconfig.old
+# NOT gitignored until now, despite the top-level CMakeLists.txt comment claiming it
+# was: a real gap, since this is exactly where WiFi credentials and the Tailscale
+# auth key are meant to live (see main/Kconfig.projbuild's Tailscale menu).
+sdkconfig.defaults.local
 
 xiaozhi-esp32/

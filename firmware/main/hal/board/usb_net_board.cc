@@ -10,6 +10,7 @@
 #include "audio_codec.h"   // output_volume() for the status report
 #include "assets/lang_config.h"
 #include "font_awesome.h"
+#include "hal/board/network_link.h"
 
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -325,6 +326,12 @@ void UsbNetBoard::StartNetwork() {
     // needs the host's address. The host connects to us whenever it likes.
     ESP_LOGI(TAG, "waiting for a host to connect to ws://192.168.7.1:%d/ws",
              CONFIG_USB_NET_LISTEN_PORT);
+
+    // Additive, not a replacement: brings up WiFi -- and a tailnet on top of it, if
+    // that is separately enabled -- alongside USB, for reaching the same server
+    // (WebsocketServerProtocol binds INADDR_ANY) with no cable. No-op unless
+    // CONFIG_STACKCHAN_WIFI_ENABLE is set.
+    stackchan::StartNetworkLink();
 
     const esp_timer_create_args_t args = {
         .callback = LogWaitingState,

@@ -2,6 +2,12 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
+# MicroLink (Tailscale client) is vendored whole by fetch_repos.py at
+# components/microlink_vendor; the actual ESP-IDF component -- and its own nested
+# wireguard_lwip component -- live one level deeper, at .../components/microlink.
+# Matches how microlink-lab's own CMakeLists.txt points at it.
+list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/components/microlink_vendor/components")
+
 set(PROJECT_VER "1.4.3-vojta")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 

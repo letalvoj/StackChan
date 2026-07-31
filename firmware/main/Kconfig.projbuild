@@ -14,6 +14,91 @@ config STACKCHAN_SERVER_URL
 
 endmenu
 
+menu "StackChan network link (WiFi / Tailscale)"
+
+config STACKCHAN_WIFI_ENABLE
+    bool "Join a WiFi network"
+    default n
+    help
+        Brings up WiFi STA via StackChanWifiStation, ALONGSIDE whatever the
+        Protocol transport below is set to -- this does not replace USB-NCM.
+
+        Useful entirely on its own, without the tailnet below: the WebSocket
+        server (/ws, /debug, /debug/reset) already binds INADDR_ANY, so it
+        becomes reachable at the device's LAN address with no protocol code
+        changes at all. /debug reports the address it ended up with, which is
+        the only practical way to learn it -- once the app runs, TinyUSB owns
+        the USB pins and there is no serial console to log it to.
+
+        Off by default: it needs real secrets below, and until they are set
+        this whole feature is inert.
+
+config STACKCHAN_WIFI_SSID
+    string "WiFi SSID"
+    depends on STACKCHAN_WIFI_ENABLE
+    default ""
+    help
+        Put the real value in sdkconfig.defaults.local (gitignored), not here.
+
+config STACKCHAN_WIFI_PASSWORD
+    string "WiFi password"
+    depends on STACKCHAN_WIFI_ENABLE
+    default ""
+    help
+        Put the real value in sdkconfig.defaults.local (gitignored), not here.
+        This is baked into the flash image in plaintext -- the same tradeoff
+        microlink-lab's own README documents for its auth key and TLS key, and
+        for the same reason: the device needs it, so it has to live somewhere.
+
+config STACKCHAN_TAILSCALE_ENABLE
+    bool "Also join a Tailscale tailnet"
+    depends on STACKCHAN_WIFI_ENABLE
+    default n
+    select MBEDTLS_CHACHA20_C
+    select MBEDTLS_POLY1305_C
+    select MBEDTLS_CHACHAPOLY_C
+    help
+        Joins a tailnet using MicroLink, an ESP32 Tailscale client vendored at
+        components/microlink_vendor, extending the reach WiFi already gives
+        beyond the LAN: the same server answers at the device's tailnet (100.x)
+        address from any machine on the tailnet -- home WiFi for the robot,
+        wherever you happen to be for the debugger. Tailscale's own WireGuard
+        tunnel is the auth and the encryption; nothing here adds a second
+        credential system on top of it.
+
+        SEPARATE from STACKCHAN_WIFI_ENABLE on purpose. These were one symbol
+        until a silent boot loop made the cost obvious: welded together, no build
+        can answer "does WiFi work?" independently of "does the VPN work?", so a
+        crash in either one indicts both and neither can be cleared. Keep them
+        separate -- the ability to attribute a failure is worth more than the one
+        saved config option.
+
+        The three selects pull in ChaCha20-Poly1305 -- WireGuard's Noise handshake
+        needs it and this project's mbedTLS build did not otherwise include it.
+        Without them the firmware builds fine and only fails at link time, deep in
+        microlink's own AEAD code, which is a genuinely confusing place to land if
+        you did not already know to look for a missing cipher. Note that `select`
+        does NOT apply to an already-generated sdkconfig: it needs an
+        `idf.py reconfigure` to take effect.
+
+config STACKCHAN_TAILSCALE_AUTH_KEY
+    string "Tailscale auth key (tskey-auth-...)"
+    depends on STACKCHAN_TAILSCALE_ENABLE
+    default ""
+    help
+        Put the real value in sdkconfig.defaults.local (gitignored), not here.
+        Use a REUSABLE, EPHEMERAL, pre-approved key with a short expiry --
+        ephemeral matters because a device that stops responding (crashed,
+        unplugged, reflashed with a blank NVS) gets reaped automatically
+        instead of leaving a stale "online" node on the tailnet forever.
+
+config STACKCHAN_TAILSCALE_DEVICE_NAME
+    string "Device name on the tailnet"
+    depends on STACKCHAN_TAILSCALE_ENABLE
+    default "stackchan"
+
+endmenu
+
 menu "Xiaozhi Assistant"
 
 config OTA_URL

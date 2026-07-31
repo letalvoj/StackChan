@@ -328,6 +328,7 @@ idf_component_register(SRCS ${SOURCES}
                         mooncake
                         mooncake_log
                         smooth_ui_toolkit
+                        microlink
                     )
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
