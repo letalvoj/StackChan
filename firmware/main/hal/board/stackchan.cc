@@ -38,7 +38,29 @@ using StackChanNetBoard = WifiBoard;
 
 #define TAG "M5Stack-StackChan-Board"
 
-#define XPOWERS_AXP2101_ICC_CHG_SET (0x62)
+#define XPOWERS_AXP2101_ICC_CHG_SET      (0x62)
+#define XPOWERS_AXP2101_CHG_V_SET        (0x64)
+// Battery-voltage ADC result, verified against XPowersLib's XPowersAXP2101.hpp
+// (getBattVoltage) rather than trusted from memory, after CHG_V_SET's enum values
+// turned out to be off by one there. RESULT0 holds the top 5 bits, RESULT1 the low 8,
+// combined as ((RESULT0 & 0x1F) << 8) | RESULT1 -- and that combined value is already
+// millivolts, no further scaling.
+#define XPOWERS_AXP2101_ADC_DATA_RESULT0 (0x34)
+#define XPOWERS_AXP2101_ADC_DATA_RESULT1 (0x35)
+// STATUS1 (VBUS/battery presence flags) and the charge-termination control register.
+// Bit 4 of ITERM_CHG_SET_CTRL is the termination ENABLE: with it clear the charger
+// never terminates on falling current at all, which looks identical from the outside
+// to "the voltage cap is not working" -- both present as charging that never finishes.
+// Bits [3:0] are the termination-current setting itself.
+#define XPOWERS_AXP2101_STATUS1          (0x00)
+#define XPOWERS_AXP2101_ITERM_CHG_SET    (0x63)
+// VBUS input current limit (bits [2:0]): 0=100mA, 1=500mA, 2=900mA, 3=1000mA,
+// 4=1500mA, 5=2000mA. This is the ceiling on everything drawn from the cable -- system
+// load AND charging together. If it sits below what the board actually draws while
+// running, charging gets whatever is left over, which can be nothing, and the charger
+// oscillates instead of charging. Firmware never sets it, so whatever is here is the
+// power-on default (or whatever the last thing to touch it left behind).
+#define XPOWERS_AXP2101_INPUT_CUR_LIMIT  (0x16)
 
 class Pmic : public Axp2101 {
 public:
@@ -62,6 +84,25 @@ public:
         XPOWERS_AXP2101_CHG_CUR_1000MA,
     } xpowers_axp2101_chg_curr_t;
 
+    // Target voltage (bits [2:0] of XPOWERS_AXP2101_CHG_V_SET). Capping below the
+    // chip's 4.2V default trades away the top of the capacity curve for far less time
+    // spent sitting at 100% -- the device stays plugged in for hours at a stretch, and
+    // that is the condition that ages a lithium cell fastest.
+    //
+    // Values start at 1, not 0, and there is no 4.36V option -- both confirmed against
+    // XPowersLib's XPowersParams.hpp, the real source this enum is modeled on. An
+    // earlier version of this enum started at 0 and invented a 4.36V entry from
+    // (wrong) memory; register value 0 is not a defined voltage code at all, which is
+    // exactly why that version measurably capped nothing -- the device kept charging
+    // straight through to what looked like the old ~4.2V default.
+    typedef enum __xpowers_axp2101_chg_vol {
+        XPOWERS_AXP2101_CHG_VOL_4V0 = 1,
+        XPOWERS_AXP2101_CHG_VOL_4V1,
+        XPOWERS_AXP2101_CHG_VOL_4V2,
+        XPOWERS_AXP2101_CHG_VOL_4V35,
+        XPOWERS_AXP2101_CHG_VOL_4V4,
+    } xpowers_axp2101_chg_vol_t;
+
     // Power Init
     Pmic(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : Axp2101(i2c_bus, addr)
     {
@@ -84,7 +125,49 @@ public:
             ESP_LOGI(TAG, "Set charge current success");
         }
 
+        // Read BEFORE writing: once setChargeTargetVoltage() runs, the factory value is
+        // gone for good. The PMIC keeps its registers across an MCU reset -- it is only
+        // cleared by actually removing power from the chip -- so on a unit this firmware
+        // has already run on, this reports what we last set, not what the factory did.
+        // It is still worth having: it catches anything else moving this register, and
+        // on a fresh unit it captures the real default exactly once.
+        chg_v_reg_stock_ = ReadReg(XPOWERS_AXP2101_CHG_V_SET);
+        ESP_LOGI(TAG, "CHG_V_SET (0x64) before we touch it: 0x%02x", chg_v_reg_stock_);
+
+        if (!setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V0)) {
+            ESP_LOGE(TAG, "Set charge voltage failed");
+        } else {
+            ESP_LOGI(TAG, "Set charge voltage success (4.0V cap)");
+        }
+        // Read back rather than trust the write: this is the only way to confirm the
+        // register actually took the value, as opposed to the write silently landing on
+        // a bit layout that does not mean what setChargeTargetVoltage() assumes it means.
+        //
+        // Cached rather than re-read on demand: this device's serial console is not a
+        // reliable place to observe it. Board/PMIC init runs before the USB CDC console
+        // finishes enumerating, so anything logged here can be sent to a listener that
+        // does not exist yet -- confirmed the hard way, twice, chasing this exact line
+        // across two reboots with nothing landing in the capture. GetChargeVoltageReg()
+        // below exposes this same value over /debug instead, which has no such race.
+        chg_v_reg_readback_ = ReadReg(XPOWERS_AXP2101_CHG_V_SET);
+        ESP_LOGI(TAG, "CHG_V_SET (0x64) reads back as 0x%02x (want low 3 bits = 0x01 for 4.0V)",
+                 chg_v_reg_readback_);
+
         SetBrightness(0);
+    }
+
+    // The boot-time readback of CHG_V_SET, cached because re-reading it live would put
+    // one more raw (non-tolerant) I2C transaction on a bus this device already had to
+    // learn to stop trusting -- see TryReadPowerStatus() below. This register does not
+    // change after boot, so a cached snapshot is exactly as accurate as a fresh read.
+    int GetChargeVoltageReg() const
+    {
+        return chg_v_reg_readback_;
+    }
+
+    int GetChargeVoltageRegStock() const
+    {
+        return chg_v_reg_stock_;
     }
 
     void SetBrightness(uint8_t brightness)
@@ -130,16 +213,276 @@ public:
         return true;
     }
 
-    bool IsExternalPowerConnected()
+    /**
+     * @brief Set charge target (constant-voltage) cutoff.
+     * @param  opt: See xpowers_axp2101_chg_vol_t enum for details.
+     * @retval
+     */
+    bool setChargeTargetVoltage(uint8_t opt)
     {
-        const uint8_t power_status      = ReadReg(0x01);
-        const uint8_t current_direction = (power_status & 0b01100000) >> 5;
-        const bool is_charging_done     = (power_status & 0b00000111) == 0b00000100;
+        if (opt > XPOWERS_AXP2101_CHG_VOL_4V4) {
+            return false;
+        }
+        // No failure check on the read: ReadReg() returns uint8_t (never -1) and
+        // ESP_ERROR_CHECKs internally on a real I2C fault, so there is no failure value
+        // for this function to observe here -- a bus error aborts the device instead.
+        // This is acceptable only because it runs once at boot, not on a recurring poll;
+        // see the TryReadPowerStatus() comment below for why that distinction matters.
+        uint8_t val = ReadReg(XPOWERS_AXP2101_CHG_V_SET);
+        val &= 0xF8;
+        WriteReg(XPOWERS_AXP2101_CHG_V_SET, val | opt);
+        return true;
+    }
 
+    // A FAILED READ HERE MUST NOT BE FATAL.
+    //
+    // I2cDevice::ReadReg wraps the transfer in ESP_ERROR_CHECK, so a transient bus
+    // timeout calls abort() and takes the whole device down. That is a reasonable
+    // default for a one-off setup register and completely wrong for a poll that runs
+    // every few seconds forever: this bus is shared with the touch panel, the IMU and
+    // the IO expander, and under load -- audio, WiFi, a tailnet, someone shaking the
+    // robot -- a 100 ms transaction occasionally loses the race.
+    //
+    // Observed exactly that: `ESP_ERR_TIMEOUT` (263) inside the esp_timer callback,
+    // abort(), reboot, mid-conversation. Same shape as the FT6336 read above, which
+    // already tolerates failure -- power state is a hint about a battery, not a
+    // correctness invariant, and last known value is a perfectly good answer for one
+    // more poll interval.
+    bool TryReadPowerStatus(uint8_t* out)
+    {
+        esp_err_t err = TryReadRegs(0x01, out, 1);
+        if (err == ESP_OK) {
+            return true;
+        }
+        pmic_read_failures_++;
+        int64_t now_us = esp_timer_get_time();
+        if (last_pmic_error_log_us_ == 0 || (now_us - last_pmic_error_log_us_) >= 5000 * 1000) {
+            ESP_LOGW(TAG, "AXP2101 read failed (%s), %lu total -- keeping last power state",
+                     esp_err_to_name(err), static_cast<unsigned long>(pmic_read_failures_));
+            last_pmic_error_log_us_ = now_us;
+        }
+        return false;
+    }
+
+    // ONE read of 0x01, every derived answer taken from that single byte.
+    //
+    // Every caller below used to do its own TryReadPowerStatus(), so a single sample of
+    // "what is the battery doing" cost four reads of the same register -- four times the
+    // traffic on a bus already shared with the touch panel, the IMU and the IO expander,
+    // and four chances to time out instead of one.
+    //
+    // Worse than the waste: the four answers were taken at four different instants, so
+    // they did not have to agree with each other. That is not hypothetical -- the
+    // recorded history shows samples reporting charge phase "not charging" while the
+    // current-direction bits in the very same sample said "charging", which is
+    // impossible from one byte and entirely possible from two reads milliseconds apart.
+    // Conclusions were drawn from that contradiction before its cause was understood.
+    //
+    // Short cache rather than an explicit snapshot object: it collapses a burst of
+    // accessor calls into one transaction without changing any call site, and is still
+    // far shorter than the 1 s poll that drives them.
+    static constexpr int64_t kPowerStatusCacheUs = 250 * 1000;
+
+    bool RefreshPowerStatus()
+    {
+        const int64_t now_us = esp_timer_get_time();
+        if (power_status_valid_ && (now_us - last_power_status_us_) < kPowerStatusCacheUs) {
+            return true;
+        }
+
+        uint8_t status = 0;
+        if (!TryReadPowerStatus(&status)) {
+            return power_status_valid_;   // keep the last known good byte
+        }
+
+        last_power_status_us_ = now_us;
+        power_status_valid_   = true;
+
+        const uint8_t current_direction = (status & 0b01100000) >> 5;
+        const uint8_t phase             = status & 0b00000111;
+        const bool is_charging_done     = phase == 0b100;
+
+        last_charging_     = (current_direction == 1);
+        last_discharging_  = (current_direction == 2);
+        last_charge_phase_ = phase;
         // Treat any non-discharging state as externally powered so a plugged-in cable
         // still counts even after the battery is full.
-        return current_direction != 2 || is_charging_done;
+        last_external_power_ = (current_direction != 2 || is_charging_done);
+        return true;
     }
+
+    bool IsExternalPowerConnected()
+    {
+        RefreshPowerStatus();
+        return last_external_power_;
+    }
+
+    bool IsDischarging()
+    {
+        RefreshPowerStatus();
+        return last_discharging_;
+    }
+
+    // Overrides Axp2101::IsCharging(), which goes straight through the raw,
+    // ESP_ERROR_CHECK-wrapped ReadReg() and aborts the device on a transient I2C
+    // timeout -- see TryReadPowerStatus() above. Now served from the shared snapshot.
+    bool IsCharging()
+    {
+        RefreshPowerStatus();
+        return last_charging_;
+    }
+
+    // Overrides Axp2101::GetBatteryLevel(), same reasoning: raw ReadReg(0xA4) on a poll
+    // path aborts on a transient bus error instead of returning the last known level.
+    int GetBatteryLevel()
+    {
+        uint8_t level = 0;
+        esp_err_t err = TryReadRegs(0xA4, &level, 1);
+        if (err != ESP_OK) {
+            return last_battery_level_;
+        }
+        last_battery_level_ = level;
+        return last_battery_level_;
+    }
+
+    // Bits [2:0] of the same power-status byte IsCharging()/IsDischarging() read, but
+    // this is the detailed charger state machine (trickle/precharge/CC/CV/done), not
+    // just current direction. Exists to answer "is it actually still bulk-charging past
+    // the voltage cap, or just idling in the CV tail" without guessing from percentage
+    // and a boolean -- percentage alone cannot distinguish those two, and got this
+    // debugging session nowhere until this existed.
+    int GetChargePhase()
+    {
+        RefreshPowerStatus();
+        return last_charge_phase_;
+    }
+
+    // Raw battery-voltage ADC, in millivolts -- see the XPOWERS_AXP2101_ADC_DATA_RESULT0/1
+    // comment above for where the formula came from. Two adjacent registers, read in one
+    // transaction rather than two separate TryReadPowerStatus-style calls.
+    // Deliberately reads the SAME quantity two different ways, because we do not yet
+    // know whether the number is real.
+    //
+    // GetBatteryVoltageMv() does one transmit-receive for both bytes, which assumes the
+    // AXP2101 auto-increments its register pointer across 0x34 -> 0x35. XPowersLib does
+    // not assume that: it issues two separate single-byte reads. If this chip does not
+    // auto-increment, the burst's second byte is garbage or a repeat of the first, which
+    // would fabricate scatter around a value that is actually stable. Reporting both in
+    // /debug turns that from an argument into a measurement -- if they disagree, the
+    // burst read is the bug.
+    int GetBatteryVoltageMvSplit()
+    {
+        uint8_t hi = 0, lo = 0;
+        if (TryReadRegs(XPOWERS_AXP2101_ADC_DATA_RESULT0, &hi, 1) != ESP_OK ||
+            TryReadRegs(XPOWERS_AXP2101_ADC_DATA_RESULT1, &lo, 1) != ESP_OK) {
+            pmic_read_failures_++;
+            return last_battery_mv_split_;
+        }
+        last_battery_mv_split_ = ((hi & 0x1F) << 8) | lo;
+        return last_battery_mv_split_;
+    }
+
+    // Second consecutive split read, taken immediately after the first. A stable
+    // quantity read twice in a row should agree; a large gap here means the reading
+    // itself is unreliable, independent of which addressing style is used.
+    int GetBatteryVoltageMvSplit2()
+    {
+        return GetBatteryVoltageMvSplit();
+    }
+
+    // The other thresholds this firmware never writes, so they sit at chip defaults.
+    // Relevant to "it will not run without the cable": if min-system-voltage or the
+    // power-off threshold sit high, the PMIC refuses to run on a pack a healthy cell
+    // would drive fine -- a config problem, not a dead battery. Input voltage limit
+    // (VINDPM) decides when the PMIC stops drawing from the cable and leans on the
+    // battery instead.
+    int GetRegRaw(uint8_t reg)
+    {
+        uint8_t val = 0;
+        if (TryReadRegs(reg, &val, 1) != ESP_OK) {
+            pmic_read_failures_++;
+            return -1;
+        }
+        return val;
+    }
+
+    int GetBatteryVoltageMv()
+    {
+        uint8_t regs[2] = {0, 0};
+        esp_err_t err = TryReadRegs(XPOWERS_AXP2101_ADC_DATA_RESULT0, regs, 2);
+        if (err != ESP_OK) {
+            pmic_read_failures_++;
+            return last_battery_mv_;
+        }
+        last_battery_mv_ = ((regs[0] & 0x1F) << 8) | regs[1];
+        return last_battery_mv_;
+    }
+
+    // Both cached the same way as everything else on this bus, and both read once per
+    // /debug hit rather than on the UI poll path -- they are configuration, not state,
+    // so they do not change between reads.
+    int GetItermReg()
+    {
+        uint8_t val = 0;
+        if (TryReadRegs(XPOWERS_AXP2101_ITERM_CHG_SET, &val, 1) != ESP_OK) {
+            pmic_read_failures_++;
+            return last_iterm_reg_;
+        }
+        last_iterm_reg_ = val;
+        return last_iterm_reg_;
+    }
+
+    int GetStatus1Reg()
+    {
+        uint8_t val = 0;
+        if (TryReadRegs(XPOWERS_AXP2101_STATUS1, &val, 1) != ESP_OK) {
+            pmic_read_failures_++;
+            return last_status1_reg_;
+        }
+        last_status1_reg_ = val;
+        return last_status1_reg_;
+    }
+
+    int GetVbusIlimReg()
+    {
+        uint8_t val = 0;
+        if (TryReadRegs(XPOWERS_AXP2101_INPUT_CUR_LIMIT, &val, 1) != ESP_OK) {
+            pmic_read_failures_++;
+            return last_vbus_ilim_reg_;
+        }
+        last_vbus_ilim_reg_ = val;
+        return last_vbus_ilim_reg_;
+    }
+
+    uint32_t GetReadFailureCount() const
+    {
+        return pmic_read_failures_;
+    }
+
+private:
+    // Defaults chosen so that a failure before the very first successful read reads as
+    // "on external power, not discharging" -- the state in which nothing sleeps or
+    // shuts down. Guessing wrong in the other direction could power the robot off.
+    bool last_external_power_        = true;
+    bool last_discharging_           = false;
+    // Charging defaults to false rather than true: unlike the discharging default above,
+    // there is no shutdown/sleep decision hanging off this one, so there is no "wrong
+    // direction" to avoid -- false just means the plug/lightning icon starts in its
+    // plainest state until the first real read comes in.
+    bool last_charging_              = false;
+    int last_battery_level_          = 100;
+    int last_charge_phase_           = -1;   // -1 until the first successful read
+    int last_battery_mv_             = 0;
+    int last_battery_mv_split_       = 0;
+    int last_iterm_reg_              = -1;
+    int last_status1_reg_            = -1;
+    int64_t last_power_status_us_    = 0;
+    bool power_status_valid_         = false;
+    int last_vbus_ilim_reg_          = -1;
+    uint32_t pmic_read_failures_     = 0;
+    int64_t last_pmic_error_log_us_  = 0;
+    int chg_v_reg_readback_          = -1;   // -1 until the constructor's read completes
+    int chg_v_reg_stock_             = -1;   // value found in 0x64 before we wrote it
 };
 
 class CustomBacklight : public Backlight {
@@ -265,6 +608,30 @@ private:
     bool last_power_save_enabled_      = false;
     int64_t last_power_state_check_ms_ = 0;
 
+    // ~2 minutes of history at the 1 s poll rate. Sized in internal RAM deliberately
+    // small: this device has failed 8 KB allocations with 14.8 KB free, so a diagnostic
+    // buffer has no business being generous. Oldest entry is evicted in place.
+    static constexpr int kPowerSampleCount = 120;
+    hal_bridge::PowerSample_t power_samples_[kPowerSampleCount] = {};
+    int power_sample_head_  = 0;   ///< next slot to write
+    int power_sample_count_ = 0;   ///< how many slots are populated (saturates at max)
+
+    void RecordPowerSample()
+    {
+        auto& slot = power_samples_[power_sample_head_];
+        slot.uptime_s    = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        slot.mv          = static_cast<uint16_t>(pmic_->GetBatteryVoltageMv());
+        slot.level       = static_cast<uint8_t>(pmic_->GetBatteryLevel());
+        slot.phase       = static_cast<int8_t>(pmic_->GetChargePhase());
+        slot.charging    = pmic_->IsCharging() ? 1 : 0;
+        slot.discharging = pmic_->IsDischarging() ? 1 : 0;
+
+        power_sample_head_ = (power_sample_head_ + 1) % kPowerSampleCount;
+        if (power_sample_count_ < kPowerSampleCount) {
+            power_sample_count_++;
+        }
+    }
+
     bool ShouldEnablePowerSave(bool has_external_power, bool is_discharging) const
     {
         return is_discharging || (has_external_power && xiaozhi_config_.allowShutdownWhenCharging);
@@ -293,6 +660,7 @@ private:
         last_power_state_check_ms_ = now_ms;
 
         UpdatePowerSaveEnabled(pmic_->IsExternalPowerConnected(), pmic_->IsDischarging());
+        RecordPowerSample();
     }
 
     void InitializePowerSaveTimer()
@@ -320,6 +688,7 @@ private:
         });
         power_save_timer_->OnShutdownRequest([this]() { pmic_->PowerOff(); });
         UpdatePowerSaveEnabled(pmic_->IsExternalPowerConnected(), pmic_->IsDischarging());
+        RecordPowerSample();
     }
 
     void InitializeI2c()
@@ -572,6 +941,77 @@ public:
     {
         return i2c_bus_;
     }
+
+    int GetChargeVoltageReg()
+    {
+        return pmic_->GetChargeVoltageReg();
+    }
+
+    int GetChargePhase()
+    {
+        return pmic_->GetChargePhase();
+    }
+
+    int GetBatteryVoltageMv()
+    {
+        return pmic_->GetBatteryVoltageMv();
+    }
+
+    uint32_t GetPmicReadFailures()
+    {
+        return pmic_->GetReadFailureCount();
+    }
+
+    int GetItermReg()
+    {
+        return pmic_->GetItermReg();
+    }
+
+    int GetStatus1Reg()
+    {
+        return pmic_->GetStatus1Reg();
+    }
+
+    int GetVbusIlimReg()
+    {
+        return pmic_->GetVbusIlimReg();
+    }
+
+    int GetChargeVoltageRegStock()
+    {
+        return pmic_->GetChargeVoltageRegStock();
+    }
+
+    int GetBatteryVoltageMvSplit()
+    {
+        return pmic_->GetBatteryVoltageMvSplit();
+    }
+
+    int GetBatteryVoltageMvSplit2()
+    {
+        return pmic_->GetBatteryVoltageMvSplit2();
+    }
+
+    int GetRegRaw(int reg)
+    {
+        return pmic_->GetRegRaw(static_cast<uint8_t>(reg));
+    }
+
+    int CopyPowerSamples(hal_bridge::PowerSample_t* out, int max_out)
+    {
+        if (out == nullptr || max_out <= 0) {
+            return 0;
+        }
+        const int n = std::min(max_out, power_sample_count_);
+        // Walk back n slots from the write head so the caller gets them oldest-first,
+        // which is the order anyone reading a trace expects.
+        int idx = (power_sample_head_ - n + kPowerSampleCount * 2) % kPowerSampleCount;
+        for (int i = 0; i < n; i++) {
+            out[i] = power_samples_[idx];
+            idx    = (idx + 1) % kPowerSampleCount;
+        }
+        return n;
+    }
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
@@ -580,6 +1020,78 @@ i2c_master_bus_handle_t hal_bridge::board_get_i2c_bus()
 {
     auto& board = (M5StackCoreS3Board&)Board::GetInstance();
     return board.GetI2cBus();
+}
+
+int hal_bridge::board_get_charge_voltage_reg()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetChargeVoltageReg();
+}
+
+int hal_bridge::board_get_charge_phase()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetChargePhase();
+}
+
+int hal_bridge::board_get_battery_voltage_mv()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetBatteryVoltageMv();
+}
+
+uint32_t hal_bridge::board_get_pmic_read_failures()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetPmicReadFailures();
+}
+
+int hal_bridge::board_get_iterm_reg()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetItermReg();
+}
+
+int hal_bridge::board_get_status1_reg()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetStatus1Reg();
+}
+
+int hal_bridge::board_get_vbus_ilim_reg()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetVbusIlimReg();
+}
+
+int hal_bridge::board_get_charge_voltage_reg_stock()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetChargeVoltageRegStock();
+}
+
+int hal_bridge::board_get_battery_voltage_mv_split()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetBatteryVoltageMvSplit();
+}
+
+int hal_bridge::board_get_battery_voltage_mv_split2()
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetBatteryVoltageMvSplit2();
+}
+
+int hal_bridge::board_get_pmic_reg(int reg)
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.GetRegRaw(reg);
+}
+
+int hal_bridge::board_copy_power_samples(hal_bridge::PowerSample_t* out, int max_out)
+{
+    auto& board = (M5StackCoreS3Board&)Board::GetInstance();
+    return board.CopyPowerSamples(out, max_out);
 }
 
 StackChanCamera* hal_bridge::board_get_camera()
@@ -610,6 +1122,19 @@ bool hal_bridge::board_is_battery_charging()
     bool discharging = false;
     if (board.GetBatteryLevel(level, charging, discharging)) {
         return charging;
+    } else {
+        return false;
+    }
+}
+
+bool hal_bridge::board_is_battery_discharging()
+{
+    auto& board      = Board::GetInstance();
+    int level        = 0;
+    bool charging    = false;
+    bool discharging = false;
+    if (board.GetBatteryLevel(level, charging, discharging)) {
+        return discharging;
     } else {
         return false;
     }

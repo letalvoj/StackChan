@@ -56,6 +56,19 @@ enum class WifiLink {
 WifiLink WifiLinkState();
 
 /**
+ * @brief One-line tailnet status for /debug: state name, VPN address, peer count.
+ *
+ * "disabled" when the feature is off, "not started" when it has not come up yet.
+ *
+ * Exists because MicroLink reports itself only through ESP_LOG, and once the app is
+ * running TinyUSB owns the USB pins so there is no console to read. Without this,
+ * "registered", "auth key rejected" and "never started at all" are indistinguishable
+ * from outside -- the device just sits there looking healthy while the tailnet shows
+ * it offline.
+ */
+std::string TailnetStatus();
+
+/**
  * @brief Signal strength in dBm, or 0 when not connected. Only meaningful when
  *        WifiLinkState() == Connected.
  */

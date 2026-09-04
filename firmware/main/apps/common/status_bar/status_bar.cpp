@@ -168,6 +168,16 @@ public:
         _lightning_icon->setImageRecolor(lv_color_hex(colorPrimary));
         _lightning_icon->setImageRecolorOpa(LV_OPA_COVER);
         _lightning_icon->setHidden(true);
+
+        // "Powered but not charging" -- e.g. the charge-voltage cap has been reached,
+        // so the AXP2101 reports no net current either way. No custom art exists for
+        // this state, and none is needed: LVGL's default font ships LV_SYMBOL_USB as a
+        // built-in glyph, styled to match the lightning icon it sits in place of.
+        _plug_label = std::make_unique<Label>(parent);
+        _plug_label->setText(LV_SYMBOL_USB);
+        _plug_label->setTextColor(lv_color_hex(colorPrimary));
+        _plug_label->setTextFont(&lv_font_montserrat_16);
+        _plug_label->setHidden(true);
     }
 
     void align(lv_align_t align, int32_t x_ofs, int32_t y_ofs)
@@ -175,6 +185,7 @@ public:
         _bar->align(align, x_ofs, y_ofs);
         lv_obj_align_to(_bat_top->get(), _bar->get(), LV_ALIGN_CENTER, 15, 0);
         lv_obj_align_to(_lightning_icon->get(), _bar->get(), LV_ALIGN_CENTER, 0, 0);
+        lv_obj_align_to(_plug_label->get(), _bar->get(), LV_ALIGN_CENTER, 0, 0);
     }
 
     void setLevel(uint8_t level)
@@ -182,14 +193,61 @@ public:
         _bar->setValue(level);
     }
 
-    void setCharging(bool charging)
+    // Three states, matching how macOS reads a laptop battery: actively drawing charge
+    // current gets the lightning bolt, external power present but not charging (already
+    // full, or a voltage cap reached before 100%) gets the plug glyph, and running on
+    // battery alone gets neither -- discharging is the assumed default and does not need
+    // an icon to announce itself.
+    //
+    // While charging, the bar is additionally tinted by the AXP2101's own charger-phase
+    // bits, because "charging" alone is the one thing that could not be diagnosed from
+    // the outside: bulk-charging toward the cap and idling in the constant-voltage tail
+    // just below it look identical on a percentage readout, and telling them apart is
+    // the whole question when a charge-voltage cap may or may not be working. Costs no
+    // space in a full status bar -- it re-uses a colour that was already there.
+    //
+    //   orange -- trickle/pre-charge (deeply discharged pack)
+    //   green  -- constant current, i.e. genuinely bulk-charging
+    //   amber  -- constant voltage, i.e. at the cap, current tapering off
+    //
+    // The AXP2101 phase field is 0..5, NOT 0..4: 4 is "charge done" and 5 is
+    // "not charging" (XPOWERS_AXP2101_CHG_STOP_STATE). Both mean no current is going
+    // in, so neither draws the lightning bolt.
+    void setPowerState(bool charging, bool discharging, int phase = -1)
     {
-        if (charging) {
-            _bar->setBgColor(lv_color_hex(0x19C25F), LV_PART_INDICATOR);
+        // Phase, where we have it, outranks the current-direction bits.
+        //
+        // Measured on this device: the direction bits reported "charging" continuously
+        // for two solid minutes -- zero transitions -- while the phase field was moving
+        // between constant-current and stopped the whole time. One of those two is
+        // telling the truth about whether current is flowing, and it is not the one that
+        // never changes. The direction bits stay as the fallback for when phase has not
+        // been read yet.
+        bool is_charging = charging;
+        if (phase >= 0) {
+            is_charging = (phase <= 3);   // trickle, pre-charge, CC, CV
+        }
+
+        if (is_charging) {
+            uint32_t phase_color = 0x19C25F;   // green: constant-current, or unknown
+            switch (phase) {
+                case 0:
+                case 1: phase_color = 0xF5A623; break;   // trickle / pre-charge
+                case 2: phase_color = 0x19C25F; break;   // constant current
+                case 3: phase_color = 0xF5D142; break;   // constant voltage (at the cap)
+                default: break;
+            }
+            _bar->setBgColor(lv_color_hex(phase_color), LV_PART_INDICATOR);
             _lightning_icon->setHidden(false);
+            _plug_label->setHidden(true);
+        } else if (!discharging) {
+            _bar->setBgColor(lv_color_hex(_color_primary), LV_PART_INDICATOR);
+            _lightning_icon->setHidden(true);
+            _plug_label->setHidden(false);
         } else {
             _bar->setBgColor(lv_color_hex(_color_primary), LV_PART_INDICATOR);
             _lightning_icon->setHidden(true);
+            _plug_label->setHidden(true);
         }
     }
 
@@ -198,6 +256,7 @@ private:
     std::unique_ptr<Container> _bat_top;
     std::unique_ptr<Image> _lightning_icon;
     lv_image_dsc_t _icon_bat_lightning;
+    std::unique_ptr<Label> _plug_label;
 
     uint32_t _color_primary = 0;
 };
@@ -215,6 +274,22 @@ public:
         _battery_icon = std::make_unique<BatteryIcon>(parent, colorSecondary, colorPrimary);
         _battery_icon->align(LV_ALIGN_RIGHT_MID, -7, 0);
 
+        // Live pack voltage, in the gap between the centred clock and the percentage.
+        // Fixed right offset rather than aligned to the percentage label: the latter
+        // changes width as it crosses 100%/10%, and a one-shot lv_obj_align_to would
+        // not track that. -85 clears the widest percentage ("100%" ends at -41) with a
+        // few px to spare, and font 14 keeps the string clear of the clock.
+        //
+        // Worth having on the face of the device rather than only in /debug: the
+        // percentage is a fuel-gauge estimate whose 100% moves with the charge-voltage
+        // cap, so it cannot answer "what is the battery actually sitting at" -- which
+        // is the only number that says whether the cap is doing anything.
+        _label_voltage = std::make_unique<Label>(parent);
+        _label_voltage->setText("");
+        _label_voltage->setTextColor(lv_color_hex(colorPrimary));
+        _label_voltage->setTextFont(&lv_font_montserrat_14);
+        _label_voltage->align(LV_ALIGN_RIGHT_MID, -85, 0);
+
         update();
     }
 
@@ -223,12 +298,56 @@ public:
         auto level = GetHAL().getBatteryLevel();
         _label_level->setText(fmt::format("{}%", level));
         _battery_icon->setLevel(level);
-        _battery_icon->setCharging(GetHAL().isBatteryCharging());
+
+        // Debounced, because the underlying state genuinely does flicker and showing
+        // that faithfully is useless to a human.
+        //
+        // Near a charge-voltage cap the charger legitimately cycles: it tops the pack to
+        // the target, terminates, the pack relaxes ~100-200 mV under load, drops below
+        // the recharge threshold, and it starts again. That is correct behaviour, but
+        // rendered live it strobes the icon and the bar colour several times a minute.
+        // Requiring a few consecutive agreeing samples keeps the display readable while
+        // leaving the raw, undebounced truth in /debug and /debug/history for diagnosis.
+        const bool charging    = GetHAL().isBatteryCharging();
+        const bool discharging = GetHAL().isBatteryDischarging();
+        const int phase        = GetHAL().getChargePhase();
+
+        if (charging == _pending_charging && discharging == _pending_discharging) {
+            if (_pending_stable_count < kStateDebounceSamples) {
+                _pending_stable_count++;
+            }
+        } else {
+            _pending_charging    = charging;
+            _pending_discharging = discharging;
+            _pending_stable_count = 1;
+        }
+
+        if (_pending_stable_count >= kStateDebounceSamples) {
+            _shown_charging    = _pending_charging;
+            _shown_discharging = _pending_discharging;
+            _shown_phase       = phase;
+        }
+
+        _battery_icon->setPowerState(_shown_charging, _shown_discharging, _shown_phase);
+
+        // 0 mV means the ADC has not answered yet (or reports no battery). Blank rather
+        // than "0.00V", which reads as a dead pack instead of a missing reading.
+        auto mv = GetHAL().getBatteryVoltageMv();
+        _label_voltage->setText(mv > 0 ? fmt::format("{:.2f}V", mv / 1000.0) : "");
     }
 
 private:
     std::unique_ptr<Label> _label_level;
     std::unique_ptr<BatteryIcon> _battery_icon;
+    std::unique_ptr<Label> _label_voltage;
+
+    static constexpr int kStateDebounceSamples = 4;
+    bool _pending_charging     = false;
+    bool _pending_discharging  = false;
+    int _pending_stable_count  = 0;
+    bool _shown_charging       = false;
+    bool _shown_discharging    = false;
+    int _shown_phase           = -1;
 };
 
 class Wifi : public Widget {

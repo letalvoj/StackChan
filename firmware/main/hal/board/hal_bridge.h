@@ -115,6 +115,36 @@ StackChanCamera* board_get_camera();
 #endif
 int board_get_battery_level();
 bool board_is_battery_charging();
+bool board_is_battery_discharging();
+int board_get_charge_voltage_reg();
+int board_get_charge_phase();
+int board_get_battery_voltage_mv();
+uint32_t board_get_pmic_read_failures();
+int board_get_iterm_reg();
+int board_get_status1_reg();
+int board_get_vbus_ilim_reg();
+int board_get_charge_voltage_reg_stock();
+int board_get_battery_voltage_mv_split();
+int board_get_battery_voltage_mv_split2();
+int board_get_pmic_reg(int reg);
+
+// One sampled moment of battery/charger state. Recorded on the existing 1 s power-state
+// poll into a small ring, because the interesting failures here are *oscillations* --
+// the charger flipping between phases, the pack sagging and recovering -- and a single
+// instantaneous /debug read cannot show a pattern that only exists over time. Polling
+// /debug in a loop from the host cannot either: it samples at whatever rate the network
+// allows, and aliases exactly the fast flicker worth seeing.
+struct PowerSample_t {
+    uint32_t uptime_s;
+    uint16_t mv;
+    uint8_t level;
+    int8_t phase;       ///< AXP2101 charger phase bits, -1 if never read
+    uint8_t charging;   ///< bool, packed to keep the ring small
+    uint8_t discharging;
+};
+
+// Copies up to max_out samples, oldest first, into out. Returns how many were written.
+int board_copy_power_samples(PowerSample_t* out, int max_out);
 void board_set_backlight_brightness(uint8_t brightness, bool permanent = false);
 uint8_t board_get_backlight_brightness();
 void board_set_speaker_volume(uint8_t volume, bool permanent = false);

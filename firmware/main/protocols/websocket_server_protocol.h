@@ -137,6 +137,10 @@ private:
     // for when the device is unreachable by hand. Does not reboot; the log is evidence.
     static esp_err_t DebugResetHandler(httpd_req_t* req);
 
+    // GET /debug/history -- the recorded battery/charger ring, oldest sample first.
+    // Read-only and independent of the session, exactly like /debug.
+    static esp_err_t DebugHistoryHandler(httpd_req_t* req);
+
     // There is deliberately no /debug/logs and no /debug/download-mode. Both were
     // built, both were removed on 2026-07-31, and both failed for the same reason:
     // they only work when the device is healthy, which is not when you need them.

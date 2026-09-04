@@ -287,6 +287,26 @@ WifiLink WifiLinkState()
     return WifiLink::Connected;
 }
 
+std::string TailnetStatus()
+{
+#if CONFIG_STACKCHAN_TAILSCALE_ENABLE
+    if (g_ml == nullptr) {
+        // Distinguishes "microlink_start() has not succeeded yet" from "it is up but
+        // stuck in REGISTERING", which look identical from the tailnet's side (both
+        // show the node offline) and want completely different fixes.
+        return "not started";
+    }
+    char ip[16] = "0.0.0.0";
+    microlink_ip_to_str(microlink_get_vpn_ip(g_ml), ip);
+    char out[64];
+    snprintf(out, sizeof(out), "%s ip=%s peers=%d",
+             StateName(microlink_get_state(g_ml)), ip, microlink_get_peer_count(g_ml));
+    return out;
+#else
+    return "disabled";
+#endif
+}
+
 int8_t WifiRssiDbm()
 {
     return (g_wifi != nullptr && g_wifi->IsConnected()) ? g_wifi->GetRssi() : 0;
@@ -309,6 +329,11 @@ std::string WifiIpAddress()
 WifiLink WifiLinkState()
 {
     return WifiLink::Disabled;
+}
+
+std::string TailnetStatus()
+{
+    return "disabled";
 }
 
 int8_t WifiRssiDbm()

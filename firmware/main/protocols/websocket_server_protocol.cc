@@ -17,6 +17,7 @@
 #include "hal/board/network_link.h"
 
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <cstdio>
 #include <cstring>
@@ -131,6 +132,19 @@ bool WebsocketServerProtocol::Start() {
     };
     if (httpd_register_uri_handler(server_, &reset_uri) != ESP_OK) {
         ESP_LOGW(TAG, "could not register /debug/reset");
+    }
+
+    const httpd_uri_t history_uri = {
+        .uri          = "/debug/history",
+        .method       = HTTP_GET,
+        .handler      = DebugHistoryHandler,
+        .user_ctx     = this,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol    = nullptr,
+    };
+    if (httpd_register_uri_handler(server_, &history_uri) != ESP_OK) {
+        ESP_LOGW(TAG, "could not register /debug/history");
     }
 
     const esp_timer_create_args_t hello_args = {
@@ -297,7 +311,7 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
     auto& app = Application::GetInstance();
     auto state = app.GetDeviceState();
 
-    char body[640];
+    char body[1408];  // grown with the field list; snprintf truncates silently otherwise
     int n = snprintf(body, sizeof(body),
         "{"
         // No %llu here on purpose: CONFIG_LIBC_NEWLIB_NANO_FORMAT drops long long
@@ -331,7 +345,74 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
         //
         // Watch it in particular when adding a netif: WireGuard runs its handshake
         // crypto (X25519, blake2s HMAC) in lwIP's context, on this stack.
-        "\"tcpip_stack_free_min\":%lu"
+        "\"tcpip_stack_free_min\":%lu,"
+        // INTERNAL RAM, which is the only memory that constrains this device -- task
+        // stacks, DMA buffers and anything touched with the cache off must live here,
+        // and PSRAM cannot substitute. heap_free above is dominated by PSRAM and says
+        // nothing about it.
+        //
+        // Both numbers, because the gap between them IS the problem: a task stack needs
+        // one CONTIGUOUS block, and this device has failed an 8 KB request while 14.8 KB
+        // was free. Watch internal_largest_block, not internal_free -- only the first
+        // predicts whether the next allocation succeeds. See ARCHITECTURE.md 7.
+        "\"internal_free\":%lu,"
+        "\"internal_largest_block\":%lu,"
+        // Added to answer "is the charge-voltage cap actually working" without a serial
+        // cable: charging/discharging are mutually exclusive current-direction reads off
+        // the PMIC, so neither true is the third state -- externally powered but not
+        // pushing current, which is exactly what reaching the cap should look like.
+        "\"battery_level\":%d,"
+        "\"battery_charging\":%s,"
+        "\"battery_discharging\":%s,"
+        // Boot-time readback of the AXP2101's CHG_V_SET register (0x64), low 3 bits.
+        // Cached at construction, not re-read here -- see GetChargeVoltageReg()'s
+        // comment. 1 means the 4.0V charge-voltage cap actually took (register values
+        // start at 1, not 0 -- confirmed against XPowersLib after an earlier version of
+        // this enum started at 0 and silently capped nothing); -1 means the
+        // constructor's own read hasn't completed yet (should never be visible in
+        // practice, since /debug isn't reachable until well after board bring-up).
+        "\"chg_v_reg\":%d,"
+        // Raw battery ADC in millivolts, and the AXP2101's own charger-phase bits
+        // (0=trickle,1=precharge,2=constant-current,3=constant-voltage,4=done). Added
+        // specifically because battery_level/battery_charging alone cannot tell "still
+        // bulk-charging past the cap" apart from "idling in the CV tail, working as
+        // intended" -- that ambiguity is what every other field here failed to resolve.
+        "\"battery_mv\":%d,"
+        // 0=trickle, 1=pre-charge, 2=constant-current, 3=constant-voltage, 4=done,
+        // 5=not charging. Six values, not five -- 5 exists and is the one that shows up
+        // while the current-direction bits still claim to be charging.
+        "\"charge_phase\":%d,"
+        "\"pmic_read_failures\":%lu,"
+        // Charge-termination control (0x63). Bit 4 is the termination ENABLE: with it
+        // clear the charger never finishes on falling current, which is indistinguishable
+        // from a broken voltage cap by every other field here. Bits [3:0] are the
+        // termination-current setting. STATUS1 (0x00) carries VBUS/battery presence.
+        "\"iterm_reg\":%d,"
+        "\"status1_reg\":%d,"
+        // VBUS input current limit (0x16, bits [2:0]): 0=100mA, 1=500mA, 2=900mA,
+        // 3=1000mA, 4=1500mA, 5=2000mA. The ceiling on system load AND charging
+        // combined -- if this is below what the board draws while awake, charging gets
+        // the remainder, which can be nothing.
+        "\"vbus_ilim_reg\":%d,"
+        // What 0x64 held at boot BEFORE this firmware wrote it. On a unit this firmware
+        // has already run on it echoes our own last value (the PMIC survives MCU
+        // resets); it only shows a true factory default on a chip that has lost power.
+        "\"chg_v_reg_stock\":%d,"
+        // Same battery voltage, three reads: burst (one transmit-receive across
+        // 0x34/0x35, assumes auto-increment), split (two single-byte reads, the way
+        // XPowersLib does it), and split again immediately after. burst != split means
+        // the chip does not auto-increment and the burst number is fabricated;
+        // split != split2 means the reading is unstable regardless of addressing.
+        "\"battery_mv_split\":%d,"
+        "\"battery_mv_split2\":%d,"
+        // Thresholds this firmware never writes, at chip defaults. Relevant to "it will
+        // not boot without a cable": 0x14 min system voltage, 0x24 power-off voltage,
+        // 0x15 input voltage limit (VINDPM), 0x12 BATFET control.
+        "\"reg_batfet_0x12\":%d,"
+        "\"reg_minsys_0x14\":%d,"
+        "\"reg_vindpm_0x15\":%d,"
+        "\"reg_voff_0x24\":%d,"
+        "\"tailnet\":\"%s\""
         "}",
         (unsigned long)(esp_timer_get_time() / 1000000),
         FIRMWARE_VERSION,
@@ -350,11 +431,62 @@ esp_err_t WebsocketServerProtocol::DebugHandler(httpd_req_t* req) {
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)esp_get_minimum_free_heap_size(),
         stackchan::WifiIpAddress().c_str(),
-        (unsigned long)TcpipTaskStackFreeMin());
+        (unsigned long)TcpipTaskStackFreeMin(),
+        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+        hal_bridge::board_get_battery_level(),
+        hal_bridge::board_is_battery_charging() ? "true" : "false",
+        hal_bridge::board_is_battery_discharging() ? "true" : "false",
+        hal_bridge::board_get_charge_voltage_reg(),
+        hal_bridge::board_get_battery_voltage_mv(),
+        hal_bridge::board_get_charge_phase(),
+        (unsigned long)hal_bridge::board_get_pmic_read_failures(),
+        hal_bridge::board_get_iterm_reg(),
+        hal_bridge::board_get_status1_reg(),
+        hal_bridge::board_get_vbus_ilim_reg(),
+        hal_bridge::board_get_charge_voltage_reg_stock(),
+        hal_bridge::board_get_battery_voltage_mv_split(),
+        hal_bridge::board_get_battery_voltage_mv_split2(),
+        hal_bridge::board_get_pmic_reg(0x12),
+        hal_bridge::board_get_pmic_reg(0x14),
+        hal_bridge::board_get_pmic_reg(0x15),
+        hal_bridge::board_get_pmic_reg(0x24),
+        stackchan::TailnetStatus().c_str());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_send(req, body, n > 0 ? n : 0);
+}
+
+esp_err_t WebsocketServerProtocol::DebugHistoryHandler(httpd_req_t* req) {
+    // Chunked rather than one buffer: 120 samples do not fit in anything this device
+    // should be allocating on a whim, and /debug's single-snprintf pattern already had
+    // to be grown three times. Streaming sidesteps the sizing question entirely.
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    static hal_bridge::PowerSample_t samples[120];   // static: not on the httpd stack
+    const int n = hal_bridge::board_copy_power_samples(samples, 120);
+
+    httpd_resp_send_chunk(req, "{\"samples\":[", HTTPD_RESP_USE_STRLEN);
+    char row[128];
+    for (int i = 0; i < n; i++) {
+        int len = snprintf(row, sizeof(row),
+                           "%s{\"t\":%lu,\"mv\":%u,\"lvl\":%u,\"phase\":%d,\"chg\":%u,\"dis\":%u}",
+                           i == 0 ? "" : ",",
+                           (unsigned long)samples[i].uptime_s,
+                           (unsigned)samples[i].mv,
+                           (unsigned)samples[i].level,
+                           (int)samples[i].phase,
+                           (unsigned)samples[i].charging,
+                           (unsigned)samples[i].discharging);
+        if (len > 0) {
+            httpd_resp_send_chunk(req, row, len);
+        }
+    }
+    int len = snprintf(row, sizeof(row), "],\"count\":%d}", n);
+    httpd_resp_send_chunk(req, row, len > 0 ? len : 0);
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 esp_err_t WebsocketServerProtocol::DebugResetHandler(httpd_req_t* req) {
