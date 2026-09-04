@@ -105,10 +105,15 @@ CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
 # second interface does something. That is worth remembering: an intermittent
 # post-boot crash right after adding a netif is this, until proven otherwise.
 #
-# 6144 rather than just-enough-for-two, because WireGuard adds a THIRD netif and
-# runs its crypto in lwIP's context, on this stack. Sized once for where this is
-# going instead of rediscovering the same crash one interface later.
-CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=6144
+# 8192 because WireGuard adds a THIRD netif and runs its Noise handshake -- X25519,
+# blake2s HMAC -- in lwIP's context, on this stack. X25519 alone is typically 1-2 KB.
+#
+# Measured with two netifs and no tailnet: peak 3,008 bytes, so 6144 was ample there.
+# Raised pre-emptively rather than after a crash, because /debug reports
+# tcpip_stack_free_min and the peak can simply be read back once the tailnet is up --
+# lowering it later with a measurement in hand is cheap, whereas discovering the
+# overflow costs a boot loop and a physical reset per attempt.
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8192
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
