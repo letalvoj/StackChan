@@ -877,9 +877,26 @@ class Device:
         the turn and this call finds nothing left to close.
         """
         await asyncio.sleep(PREROLL_FRAMES * self.codec.frame_ms / 1000.0 + 0.4)
+
+        # A GOODBYE ENDS THE CONVERSATION, not just the audio channel.
+        #
+        # Both of these must be cleared here, and forgetting them made the tool worse
+        # than useless. The device going idle does not, by itself, tell this client
+        # anything: `listening` stays set, so the session loop sails past its
+        # `listening.wait()` and reconnects instantly -- carrying `resumption_handle`,
+        # which rejoins the SAME conversation exactly where it left off. The observable
+        # result was that saying goodbye and then tapping the face made the robot pick
+        # up mid-turn and keep talking, which is the opposite of hanging up.
+        #
+        # Dropping the handle is the part that makes it a goodbye: the next tap should
+        # open a new conversation, not resume the one that was just ended.
+        self.listening.clear()
+        self.resumption_handle = None
+
         try:
             await self.call("self.robot.end_conversation", {}, timeout=5.0)
-            print("👋 session closed by the agent -- tap the face to wake it", flush=True)
+            print("👋 session closed by the agent -- tap the face to start a new chat",
+                  flush=True)
         except Exception as exc:
             print(f"  ⚠ end_conversation failed: {type(exc).__name__}", flush=True)
 
@@ -1041,6 +1058,29 @@ async def handle_tool_call(device: Device, call, session) -> types.FunctionRespo
 
 async def converse(device: Device, session):
     """Bridge one live session: mic up, audio down, tool calls across."""
+
+    # ATTEMPTED AND REVERTED, 2026-07-31: a send_client_content() announcement here,
+    # right after connecting a video-tooled session, telling the model its camera was
+    # on. The THEORY was sound and is still believed correct -- tools_for(True) removes
+    # take_photo on the assumption that its absence alone reads as "you can see
+    # continuously now", and it does not: frames arrive as bare video Blobs with no
+    # accompanying text, so a model with no camera tool and no camera note has zero
+    # signal anything is looking at anything, and reports no camera while frames are in
+    # fact arriving.
+    #
+    # But sending it HERE broke the session outright: every video-tooled connect (which
+    # includes every reconnect, not just the first) fired it immediately, and the API
+    # closed with 1007 "invalid frame payload data / Request contains an invalid
+    # argument" within one or two frames. That produced a reconnect STORM -- each
+    # failure reopened the session, which re-sent the note, which failed again -- and
+    # is why the robot stopped responding rather than merely mis-describing its camera.
+    #
+    # The next attempt should own two things this one did not: (1) fire once per VIDEO
+    # SESSION, not once per socket reconnect -- a network hiccup mid video-call must not
+    # replay it -- and (2) confirm empirically, before trusting it again, that
+    # send_client_content is even valid immediately after a session_resumption connect,
+    # since that is the one variable that changed between the working sensor-note calls
+    # elsewhere in this file and this one.
 
     async def abort_uplink():
         """Tell the model the turn was dismissed. The local half already happened.
