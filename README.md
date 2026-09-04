@@ -15,8 +15,15 @@ Upstream's README follows below.
 
 ## Quick start
 
+Hardware: an **M5Stack CoreS3** on a Stack-chan servo base. Toolchain: **ESP-IDF v5.5.5**
+— `make esp32` looks for it in `$IDF_PATH`, then `../esp-idf`, then `~/esp/esp-idf`.
+
 ```bash
-# 0. One-time: the Python venv every wasm/ script expects at ./wasm/.venv
+# 0a. One-time: fetch the vendored components and the xiaozhi-esp32 fork. They are
+#     gitignored, so a fresh clone has none of them and the build fails without this.
+python3 firmware/fetch_repos.py
+
+# 0b. One-time: the Python venv every wasm/ script expects at ./wasm/.venv
 #    (pyaudio needs portaudio: `brew install portaudio` on macOS)
 python3 -m venv wasm/.venv && wasm/.venv/bin/pip install -r wasm/requirements.txt
 
@@ -25,7 +32,7 @@ python3 -m venv wasm/.venv && wasm/.venv/bin/pip install -r wasm/requirements.tx
 #    after. esptool can write flash on its own but cannot start the app -- see
 #    firmware/DEBUGGING.md 3. Never hardcode the port; it varies between boots
 #    of the same device (cu.usbmodem101 and cu.usbmodem1101 both observed).
-cd firmware && source ../../esp-idf/export.sh && idf.py build
+cd firmware && source "${IDF_PATH:-$HOME/esp/esp-idf}/export.sh" && idf.py build
 cd build && python -m esptool --chip esp32s3 -p "$(ls /dev/cu.usbmodem* | head -1)" \
     -b 460800 --before default_reset --after no_reset write_flash "@flash_args"
 
@@ -64,7 +71,7 @@ room costs nothing.
 
 | | |
 |---|---|
-| [AGENT.md](../AGENT.md) | The constitution — read before changing anything |
+| `AGENT.md` | The constitution. Lives outside this repo and is not published; ARCHITECTURE.md carries the parts you need |
 | [firmware/DEBUGGING.md](firmware/DEBUGGING.md) | Hardware playbook: PIDs, flashing, log locations, symptom table |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How the WASM sandbox and the USB transport work |
 | [firmware/AVATAR.md](firmware/AVATAR.md) | How the face is drawn, and how to replace it |
