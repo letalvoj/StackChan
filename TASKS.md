@@ -6,6 +6,26 @@ Captured during architectural design sessions. Items are roughly priority-ordere
 
 ## P0 — Active / In Progress
 
+- [x] **`tts stop` no longer arms the mic.** It was hardcoded to `speaking → listening`
+      (`application_core.cc`), so *any* peer could put the device into `listening` — mic
+      live, `OnAudioVoiceProcessing(true)` — just by sending a `tts start`/`stop` pair.
+      Using the robot as a speaker left it stuck there indefinitely, and it walked around
+      the rule that the tap is the privacy boundary. `ApplicationCore` now records the
+      state `tts start` interrupted and restores it: a real turn returns to `listening`,
+      an announcement from `idle` returns to `idle`. No protocol change; `gemini_live.py`
+      is unaffected. **Built for both targets, not yet verified on hardware.**
+
+- [ ] **`listening` still has no automatic exit.** The fix above removes the *cause* for
+      announcements, not the general case: a real agent that opens a turn and then dies
+      leaves the device listening forever. Only the human's tap and the model's
+      `self.robot.end_conversation` get out; upstream's `IsTimeout()` is overridden to
+      false and must stay that way (it measures socket silence, meaningless for a device
+      in the server role). Candidate: a watchdog on **room silence** rather than socket
+      silence — the device already computes `audio_service_.IsVoiceDetected()` and
+      forwards it as `{"type":"vad"}` (`application.cc:284`), so N seconds in `listening`
+      with no speech → `listen stop` + idle, any speech resets the clock. N as Kconfig,
+      45–60 s. Cannot fire mid-conversation; needs no new sensing.
+
 - [x] **WiFi works, alongside USB-NCM.** `CONFIG_STACKCHAN_WIFI_ENABLE` brings up a
       WiFi STA next to the USB link; the server binds `INADDR_ANY`, so `/ws`, `/debug`
       and `/debug/reset` answer on the LAN address with no protocol changes. Verified

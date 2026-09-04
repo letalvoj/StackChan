@@ -227,12 +227,20 @@ Two behaviours worth knowing before writing a client:
 (audio, TTS state) have no requester to route back to, so a second client would silently
 steal a live audio stream. Fan-out belongs in a host-side client, not in firmware.
 
-**The device expects a conversation, not a command stream.** After `tts stop` it does not
-return to `idle` — it transitions `speaking → listening` and emits
-`{"type":"listen","state":"start","mode":"auto"}`, opening the user's turn. A client that
-never closes that turn leaves the device parked in `listening`, where the idle servo
-animation does not run. This is correct agent behaviour, not a bug, and it is the half of
-the loop a conversational client must implement.
+**`tts stop` returns to the state `tts start` interrupted.** Inside a real turn that is
+`listening`, so the device emits `{"type":"listen","state":"start","mode":"auto"}` and
+reopens the user's turn — a client that never closes it leaves the device parked there,
+where the idle servo animation does not run, and closing it is the half of the loop a
+conversational client must implement. An utterance that began from `idle` returns to
+`idle`.
+
+That distinction is the rule that **only the device arms its own microphone.** Upstream
+hardcodes `speaking → listening`, which is right when the device is a *client* dialling a
+conversational server and every utterance is a reply inside a turn a human opened. Here the
+device is the *server* and the peer may be a script using it as a speaker, so the same edge
+let any peer turn the microphone on by sending audio. `ApplicationCore` now records the
+pre-speaking state and restores it (`application_core.cc`, `tts` handler); the entry to
+`listening` stays where it belongs, on a tap or a wake word.
 
 Note also that mic audio only flows once the app calls `OpenAudioChannel()` (wake word or
 button). A client that wants to *hear* the device must account for that; playback into the

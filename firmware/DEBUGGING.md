@@ -298,13 +298,22 @@ curl -s -X POST http://192.168.7.1:8081/debug/reset
 
 ## 7. Conversation loop, in one paragraph
 
-After `tts stop` the device does **not** return to idle: it goes `speaking → listening`
-and emits `{"type":"listen","state":"start","mode":"auto"}`, opening the user's turn.
-A client that never closes that turn leaves the device parked in `listening`, where the
-idle servo animation does not run — this looks like a bug and is not. Mic audio only
-flows once the app calls `OpenAudioChannel()`, which is gated behind a tap or wake word;
-playback into the device needs no such thing. A tap on the face is the whole trigger,
-and is also the privacy boundary: nothing leaves the device before it.
+**`tts stop` returns the device to whatever state `tts start` interrupted.** Inside a real
+turn that is `listening`, so the loop continues: the device re-emits
+`{"type":"listen","state":"start","mode":"auto"}` and reopens the user's turn, and a client
+that never closes it leaves the device parked there, where the idle servo animation does
+not run — that half of the loop is still the client's to implement. An utterance that
+began from `idle` — a script using the robot as a speaker — returns to `idle` instead.
+
+This used to be unconditional (`speaking → listening` always), which meant any peer could
+arm the microphone by sending a `tts start`/`stop` pair. **The device decides when it
+listens, and only a tap or a wake word opens that door.** A tap on the face is the whole
+trigger, and is also the privacy boundary: nothing leaves the device before it.
+
+Still unowned: nothing returns the device to idle if a real agent connects, opens a turn
+and then goes quiet. The human's tap and the model's `self.robot.end_conversation` are the
+only exits, and upstream's `IsTimeout()` net is overridden to false here for good reasons
+(§5's channel-timeout row). A VAD-based watchdog is the candidate — see TASKS.md.
 
 ---
 
