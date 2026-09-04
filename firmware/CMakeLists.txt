@@ -8,7 +8,8 @@ cmake_minimum_required(VERSION 3.16)
 # Matches how microlink-lab's own CMakeLists.txt points at it.
 list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/components/microlink_vendor/components")
 
-set(PROJECT_VER "1.4.3-vojta")
+string(TIMESTAMP BUILD_TIMESTAMP "%Y-%m-%dT%H:%M")
+set(PROJECT_VER "${BUILD_TIMESTAMP}")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 
 # Add this line to disable the specific warning
