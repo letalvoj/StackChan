@@ -4,13 +4,14 @@ import json
 
 
 def _has_local_work(path, local_branch):
-    """True if `path` holds work that only exists here.
+    """True if `path` holds work that may only exist here.
 
-    xiaozhi-esp32 is a git-ignored checkout carrying local-only commits (the
-    ApplicationCore extraction and UsbProtocol) on a branch that is deliberately
-    never pushed anywhere. A plain `git checkout <tag>` would silently swap the
-    working tree back to vanilla upstream and the build would quietly lose those
-    features, so refuse to touch such a checkout at all.
+    xiaozhi-esp32 is a git-ignored checkout carrying the fork's own commits (the
+    ApplicationCore extraction, UsbProtocol, WebsocketServerProtocol selection).
+    Those now live on the `wasm` branch of letalvoj/xiaozhi-esp32, so a fresh
+    clone gets them -- but an existing checkout may still hold work that has not
+    been pushed yet, and a plain `git checkout <ref>` would silently swap the
+    working tree out from under it. Refuse to touch such a checkout at all.
     """
     if not local_branch or not os.path.exists(path):
         return False
@@ -34,12 +35,6 @@ def clone_or_update_repo(
 
     if not os.path.exists(path):
         subprocess.run(["git", "clone", repo_url, path], check=True)
-        if local_branch:
-            print(
-                f"WARNING: {path} was cloned fresh at '{ref}'. The local-only "
-                f"'{local_branch}' branch is NOT in this checkout and cannot be "
-                f"recovered from any remote."
-            )
     else:
         subprocess.run(["git", "-C", path, "fetch"], check=True)
 

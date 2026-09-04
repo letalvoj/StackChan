@@ -43,20 +43,27 @@ stackchan/
 ### 2.1 The xiaozhi-esp32 checkout — read this before touching `fetch_repos.py`
 
 `firmware/xiaozhi-esp32/` is a **separate git repository**, **git-ignored** by the
-parent, sitting on a **local-only branch `wasm`** that is deliberately **never pushed**:
+parent, sitting on branch `wasm` of a **fork**:
 
 ```
-origin  = https://github.com/78/xiaozhi-esp32.git   (upstream; not writable by us)
-wasm    = v2.2.4 + ApplicationCore extraction + USB transport selection
+upstream  = https://github.com/78/xiaozhi-esp32.git       (not writable by us)
+fork      = https://github.com/letalvoj/xiaozhi-esp32.git (branch `wasm`)
+wasm      = v2.2.4 + ApplicationCore extraction + USB transport selection
 ```
 
-Those commits exist in exactly one place: this working copy. There is no remote that can
-restore them.
+`repos.json` points at the fork, so **a fresh clone of this repo builds**: `fetch_repos.py`
+clones `letalvoj/xiaozhi-esp32` at `wasm` and gets ApplicationCore, the USB transports and
+the `tts stop` lifecycle fix. This was not always true — the branch used to be local-only,
+and a fresh clone silently got vanilla v2.2.4 and a tree that would not build.
 
 `fetch_repos.py` used to run `git checkout v2.2.4` unconditionally, which would silently
 revert the tree to vanilla upstream — the branch ref survived, but the build quietly lost
 ApplicationCore and the USB transport with no error. It now honours a `local_branch` key in
-`repos.json` and refuses to touch a checkout that has one.
+`repos.json` and refuses to touch a checkout that has one, which still matters: an existing
+checkout can hold commits that have not been pushed to the fork yet.
+
+**Work in the nested repo must still be pushed explicitly** (`git push fork wasm`). Nothing
+in `make all` or the parent repo's own push does it for you.
 
 There is **no patch file any more**. `patches/xiaozhi-esp32.patch` was removed once every
 line of it was confirmed present in the branch commits. Do not reintroduce patching.
