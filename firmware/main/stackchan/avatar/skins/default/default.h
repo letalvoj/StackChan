@@ -22,7 +22,17 @@ public:
     lv_color_t secondaryColor = lv_color_black();
 
     void init(lv_obj_t* parent, const lv_font_t* font = &lv_font_montserrat_16);
+    lv_obj_t* panel() const override
+    {
+        return _pannel ? _pannel->get() : nullptr;
+    }
+
     uitk::lvgl_cpp::Container* getPanel() const;
+
+    /// The original layout, declared rather than assumed. These are the numbers the
+    /// decorators used to carry as their own constants, so this skin is unchanged.
+    FaceAnchors anchors() const override;
+    OverlayArt overlayArt(OverlayKind kind) const override;
 
 private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _pannel;

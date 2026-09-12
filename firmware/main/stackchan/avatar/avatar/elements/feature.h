@@ -42,9 +42,28 @@ public:
         return _size;
     }
 
+    /**
+     * @brief Where the eye is looking, -100 to 100 on each axis, 0,0 being straight ahead.
+     *
+     * Distinct from setPosition: position slides the whole eye across the face, gaze moves
+     * only the pupil inside it. Sliding the eye is what the idle animation used to do on
+     * its own, and it reads as the face drifting rather than as the robot looking at
+     * something. A skin with no pupil to move can ignore this.
+     */
+    virtual void setGaze(const uitk::Vector2i& gaze)
+    {
+        _gaze = gaze;
+        _gaze.clamp({-100, -100}, {100, 100});
+    }
+    virtual uitk::Vector2i getGaze()
+    {
+        return _gaze;
+    }
+
 protected:
     int _weight = 0;
     int _size   = 0;
+    uitk::Vector2i _gaze{};
 };
 
 }  // namespace stackchan::avatar

@@ -1,0 +1,9 @@
+{
+  "svg_files_checked": 272,
+  "standalone_frames_rendered": 174,
+  "minimum_standalone_frame_margin_px": 14,
+  "unique_ids": true,
+  "resolved_references": true,
+  "acyclic_use_references": true,
+  "device_tested": false
+}

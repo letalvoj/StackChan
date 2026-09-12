@@ -1,0 +1,733 @@
+{
+  "canvas": [
+    320,
+    240
+  ],
+  "anchors": {
+    "eyes": [
+      160,
+      100
+    ],
+    "gaze": [
+      160,
+      100
+    ],
+    "brows": [
+      160,
+      60
+    ],
+    "mouth": [
+      160,
+      168
+    ],
+    "cheeks": [
+      160,
+      140
+    ],
+    "accent-right": [
+      274,
+      44
+    ]
+  },
+  "scale": 1.5,
+  "sets": {
+    "mouth": [
+      {
+        "name": "quiet-smile",
+        "ids": [
+          "mouth-quiet-smile-00",
+          "mouth-quiet-smile-01",
+          "mouth-quiet-smile-02",
+          "mouth-quiet-smile-03",
+          "mouth-quiet-smile-04",
+          "mouth-quiet-smile-05"
+        ],
+        "ms": [
+          1000,
+          180,
+          240,
+          320,
+          220,
+          1000
+        ],
+        "loop": "occasional, not continuous"
+      },
+      {
+        "name": "speech-neutral",
+        "ids": [
+          "mouth-speech-neutral-00",
+          "mouth-speech-neutral-01",
+          "mouth-speech-neutral-02",
+          "mouth-speech-neutral-03",
+          "mouth-speech-neutral-04",
+          "mouth-speech-neutral-05"
+        ],
+        "ms": [
+          90,
+          100,
+          130,
+          110,
+          80,
+          120
+        ],
+        "loop": "audio-driven; frames are phoneme poses"
+      },
+      {
+        "name": "speech-delighted",
+        "ids": [
+          "mouth-speech-delighted-00",
+          "mouth-speech-delighted-01",
+          "mouth-speech-delighted-02",
+          "mouth-speech-delighted-03",
+          "mouth-speech-delighted-04",
+          "mouth-speech-delighted-05"
+        ],
+        "ms": [
+          100,
+          120,
+          170,
+          120,
+          140,
+          220
+        ],
+        "loop": "speaking / short laugh"
+      },
+      {
+        "name": "speech-grumpy",
+        "ids": [
+          "mouth-speech-grumpy-00",
+          "mouth-speech-grumpy-01",
+          "mouth-speech-grumpy-02",
+          "mouth-speech-grumpy-03",
+          "mouth-speech-grumpy-04",
+          "mouth-speech-grumpy-05"
+        ],
+        "ms": [
+          200,
+          100,
+          130,
+          110,
+          100,
+          280
+        ],
+        "loop": "audio-driven; preserve tense corners"
+      },
+      {
+        "name": "speech-sad",
+        "ids": [
+          "mouth-speech-sad-00",
+          "mouth-speech-sad-01",
+          "mouth-speech-sad-02",
+          "mouth-speech-sad-03",
+          "mouth-speech-sad-04",
+          "mouth-speech-sad-05"
+        ],
+        "ms": [
+          260,
+          110,
+          150,
+          140,
+          180,
+          300
+        ],
+        "loop": "audio-driven; hesitant releases"
+      },
+      {
+        "name": "thinking",
+        "ids": [
+          "mouth-thinking-00",
+          "mouth-thinking-01",
+          "mouth-thinking-02",
+          "mouth-thinking-03",
+          "mouth-thinking-04",
+          "mouth-thinking-05"
+        ],
+        "ms": [
+          700,
+          150,
+          500,
+          220,
+          200,
+          800
+        ],
+        "loop": "one curious reaction"
+      },
+      {
+        "name": "yawn",
+        "ids": [
+          "mouth-yawn-00",
+          "mouth-yawn-01",
+          "mouth-yawn-02",
+          "mouth-yawn-03",
+          "mouth-yawn-04",
+          "mouth-yawn-05"
+        ],
+        "ms": [
+          600,
+          180,
+          300,
+          750,
+          300,
+          900
+        ],
+        "loop": "event; no pupil while eyes are shut"
+      }
+    ],
+    "eyes": [
+      {
+        "name": "blink",
+        "ids": [
+          "eyes-blink-00",
+          "eyes-blink-01",
+          "eyes-blink-02",
+          "eyes-blink-03",
+          "eyes-blink-04",
+          "eyes-blink-05"
+        ],
+        "ms": [
+          1800,
+          45,
+          40,
+          65,
+          55,
+          220
+        ],
+        "loop": "occasional; blink again after 120 ms sometimes",
+        "pupil_visibility": [
+          "both",
+          "both",
+          "none",
+          "none",
+          "none",
+          "both"
+        ],
+        "gaze_limit": [
+          8,
+          6
+        ]
+      },
+      {
+        "name": "smile-squeeze",
+        "ids": [
+          "eyes-smile-squeeze-00",
+          "eyes-smile-squeeze-01",
+          "eyes-smile-squeeze-02",
+          "eyes-smile-squeeze-03",
+          "eyes-smile-squeeze-04",
+          "eyes-smile-squeeze-05"
+        ],
+        "ms": [
+          200,
+          90,
+          160,
+          180,
+          160,
+          300
+        ],
+        "loop": "joy transition; hide pupils on arcs",
+        "pupil_visibility": [
+          "both",
+          "none",
+          "none",
+          "none",
+          "none",
+          "both"
+        ],
+        "gaze_limit": [
+          8,
+          6
+        ]
+      },
+      {
+        "name": "curious-widen",
+        "ids": [
+          "eyes-curious-widen-00",
+          "eyes-curious-widen-01",
+          "eyes-curious-widen-02",
+          "eyes-curious-widen-03",
+          "eyes-curious-widen-04",
+          "eyes-curious-widen-05"
+        ],
+        "ms": [
+          500,
+          180,
+          400,
+          180,
+          600,
+          300
+        ],
+        "loop": "curiosity / asymmetric reaction",
+        "pupil_visibility": [
+          "both",
+          "both",
+          "both",
+          "left",
+          "left",
+          "both"
+        ],
+        "gaze_limit": [
+          8,
+          6
+        ]
+      },
+      {
+        "name": "grumpy-squint",
+        "ids": [
+          "eyes-grumpy-squint-00",
+          "eyes-grumpy-squint-01",
+          "eyes-grumpy-squint-02",
+          "eyes-grumpy-squint-03",
+          "eyes-grumpy-squint-04",
+          "eyes-grumpy-squint-05"
+        ],
+        "ms": [
+          200,
+          180,
+          350,
+          220,
+          500,
+          220
+        ],
+        "loop": "focus or anger; narrowed pupils gated",
+        "pupil_visibility": [
+          "both",
+          "both",
+          "none",
+          "none",
+          "none",
+          "both"
+        ],
+        "gaze_limit": [
+          3,
+          3
+        ]
+      },
+      {
+        "name": "heavy-sad",
+        "ids": [
+          "eyes-heavy-sad-00",
+          "eyes-heavy-sad-01",
+          "eyes-heavy-sad-02",
+          "eyes-heavy-sad-03",
+          "eyes-heavy-sad-04",
+          "eyes-heavy-sad-05"
+        ],
+        "ms": [
+          300,
+          350,
+          650,
+          150,
+          170,
+          350
+        ],
+        "loop": "sad settling; eye droop precedes mouth",
+        "pupil_visibility": [
+          "both",
+          "both",
+          "both",
+          "none",
+          "none",
+          "both"
+        ],
+        "gaze_limit": [
+          3,
+          3
+        ]
+      },
+      {
+        "name": "sleepy-drift",
+        "ids": [
+          "eyes-sleepy-drift-00",
+          "eyes-sleepy-drift-01",
+          "eyes-sleepy-drift-02",
+          "eyes-sleepy-drift-03",
+          "eyes-sleepy-drift-04",
+          "eyes-sleepy-drift-05"
+        ],
+        "ms": [
+          700,
+          500,
+          1300,
+          600,
+          250,
+          650
+        ],
+        "loop": "slow irregular cycle",
+        "pupil_visibility": [
+          "none",
+          "none",
+          "none",
+          "none",
+          "none",
+          "none"
+        ],
+        "gaze_limit": [
+          8,
+          6
+        ]
+      }
+    ],
+    "gaze": [
+      {
+        "name": "look-left",
+        "ids": [
+          "gaze-look-left-00",
+          "gaze-look-left-01",
+          "gaze-look-left-02",
+          "gaze-look-left-03",
+          "gaze-look-left-04",
+          "gaze-look-left-05"
+        ],
+        "ms": [
+          900,
+          35,
+          70,
+          1200,
+          200,
+          100
+        ],
+        "loop": "saccade; hold the target"
+      },
+      {
+        "name": "look-up-right",
+        "ids": [
+          "gaze-look-up-right-00",
+          "gaze-look-up-right-01",
+          "gaze-look-up-right-02",
+          "gaze-look-up-right-03",
+          "gaze-look-up-right-04",
+          "gaze-look-up-right-05"
+        ],
+        "ms": [
+          800,
+          40,
+          70,
+          900,
+          180,
+          120
+        ],
+        "loop": "curious glance"
+      },
+      {
+        "name": "follow-attention",
+        "ids": [
+          "gaze-follow-attention-00",
+          "gaze-follow-attention-01",
+          "gaze-follow-attention-02",
+          "gaze-follow-attention-03",
+          "gaze-follow-attention-04",
+          "gaze-follow-attention-05"
+        ],
+        "ms": [
+          180,
+          180,
+          180,
+          180,
+          180,
+          180
+        ],
+        "loop": "tracking; use continuous interpolation"
+      },
+      {
+        "name": "head-counterlook",
+        "ids": [
+          "gaze-head-counterlook-00",
+          "gaze-head-counterlook-01",
+          "gaze-head-counterlook-02",
+          "gaze-head-counterlook-03",
+          "gaze-head-counterlook-04",
+          "gaze-head-counterlook-05"
+        ],
+        "ms": [
+          200,
+          45,
+          90,
+          140,
+          180,
+          400
+        ],
+        "loop": "head turns right; reverse for left"
+      }
+    ],
+    "brows": [
+      {
+        "name": "curiosity",
+        "ids": [
+          "brows-curiosity-00",
+          "brows-curiosity-01",
+          "brows-curiosity-02",
+          "brows-curiosity-03",
+          "brows-curiosity-04",
+          "brows-curiosity-05"
+        ],
+        "ms": [
+          400,
+          120,
+          450,
+          350,
+          180,
+          500
+        ],
+        "loop": "return to rest"
+      },
+      {
+        "name": "stubborn",
+        "ids": [
+          "brows-stubborn-00",
+          "brows-stubborn-01",
+          "brows-stubborn-02",
+          "brows-stubborn-03",
+          "brows-stubborn-04",
+          "brows-stubborn-05"
+        ],
+        "ms": [
+          140,
+          140,
+          140,
+          140,
+          140,
+          140
+        ],
+        "loop": "return to rest"
+      },
+      {
+        "name": "concern",
+        "ids": [
+          "brows-concern-00",
+          "brows-concern-01",
+          "brows-concern-02",
+          "brows-concern-03",
+          "brows-concern-04",
+          "brows-concern-05"
+        ],
+        "ms": [
+          140,
+          140,
+          140,
+          140,
+          140,
+          140
+        ],
+        "loop": "return to rest"
+      },
+      {
+        "name": "soft-delight",
+        "ids": [
+          "brows-soft-delight-00",
+          "brows-soft-delight-01",
+          "brows-soft-delight-02",
+          "brows-soft-delight-03",
+          "brows-soft-delight-04",
+          "brows-soft-delight-05"
+        ],
+        "ms": [
+          250,
+          140,
+          220,
+          200,
+          180,
+          350
+        ],
+        "loop": "return to rest"
+      }
+    ],
+    "cheeks": [
+      {
+        "name": "warm-blush",
+        "ids": [
+          "cheeks-warm-blush-00",
+          "cheeks-warm-blush-01",
+          "cheeks-warm-blush-02",
+          "cheeks-warm-blush-03",
+          "cheeks-warm-blush-04",
+          "cheeks-warm-blush-05"
+        ],
+        "ms": [
+          100,
+          140,
+          260,
+          900,
+          400,
+          400
+        ],
+        "loop": "fade in / out once"
+      },
+      {
+        "name": "smile-lift",
+        "ids": [
+          "cheeks-smile-lift-00",
+          "cheeks-smile-lift-01",
+          "cheeks-smile-lift-02",
+          "cheeks-smile-lift-03",
+          "cheeks-smile-lift-04",
+          "cheeks-smile-lift-05"
+        ],
+        "ms": [
+          200,
+          100,
+          130,
+          500,
+          180,
+          250
+        ],
+        "loop": "return to rest"
+      },
+      {
+        "name": "puffed-hmph",
+        "ids": [
+          "cheeks-puffed-hmph-00",
+          "cheeks-puffed-hmph-01",
+          "cheeks-puffed-hmph-02",
+          "cheeks-puffed-hmph-03",
+          "cheeks-puffed-hmph-04",
+          "cheeks-puffed-hmph-05"
+        ],
+        "ms": [
+          180,
+          100,
+          180,
+          500,
+          220,
+          300
+        ],
+        "loop": "return to rest"
+      },
+      {
+        "name": "pet-warmth",
+        "ids": [
+          "cheeks-pet-warmth-00",
+          "cheeks-pet-warmth-01",
+          "cheeks-pet-warmth-02",
+          "cheeks-pet-warmth-03",
+          "cheeks-pet-warmth-04",
+          "cheeks-pet-warmth-05"
+        ],
+        "ms": [
+          120,
+          160,
+          250,
+          700,
+          250,
+          400
+        ],
+        "loop": "return to rest"
+      }
+    ],
+    "accents": [
+      {
+        "name": "heart-pulse",
+        "ids": [
+          "accents-heart-pulse-00",
+          "accents-heart-pulse-01",
+          "accents-heart-pulse-02",
+          "accents-heart-pulse-03",
+          "accents-heart-pulse-04",
+          "accents-heart-pulse-05"
+        ],
+        "ms": [
+          250,
+          100,
+          100,
+          130,
+          130,
+          600
+        ],
+        "loop": "loop while active"
+      },
+      {
+        "name": "dizzy-spin",
+        "ids": [
+          "accents-dizzy-spin-00",
+          "accents-dizzy-spin-01",
+          "accents-dizzy-spin-02",
+          "accents-dizzy-spin-03",
+          "accents-dizzy-spin-04",
+          "accents-dizzy-spin-05"
+        ],
+        "ms": [
+          110,
+          110,
+          110,
+          110,
+          110,
+          110
+        ],
+        "loop": "loop while active"
+      },
+      {
+        "name": "sweat-slip",
+        "ids": [
+          "accents-sweat-slip-00",
+          "accents-sweat-slip-01",
+          "accents-sweat-slip-02",
+          "accents-sweat-slip-03",
+          "accents-sweat-slip-04",
+          "accents-sweat-slip-05"
+        ],
+        "ms": [
+          250,
+          150,
+          140,
+          120,
+          100,
+          70
+        ],
+        "loop": "one falling drop, then hide"
+      },
+      {
+        "name": "anger-twitch",
+        "ids": [
+          "accents-anger-twitch-00",
+          "accents-anger-twitch-01",
+          "accents-anger-twitch-02",
+          "accents-anger-twitch-03",
+          "accents-anger-twitch-04",
+          "accents-anger-twitch-05"
+        ],
+        "ms": [
+          400,
+          65,
+          130,
+          70,
+          200,
+          650
+        ],
+        "loop": "two small twitches; avoid constant vibration"
+      }
+    ]
+  },
+  "speech_pose_names": {
+    "speech-neutral": [
+      "closed / M B P",
+      "wide / EE",
+      "open / AH",
+      "round / OO",
+      "lower lip / F V",
+      "middle / EH"
+    ],
+    "speech-delighted": [
+      "smiling rest",
+      "small open grin",
+      "laugh peak",
+      "crooked open grin",
+      "release",
+      "smiling rest"
+    ],
+    "speech-grumpy": [
+      "pressed rest",
+      "tight teeth",
+      "tense AH",
+      "tight OO",
+      "pressed closure",
+      "rest"
+    ],
+    "speech-sad": [
+      "frown rest",
+      "hesitant start",
+      "low-corner AH",
+      "low-corner OO",
+      "closing frown",
+      "rest"
+    ]
+  }
+}
