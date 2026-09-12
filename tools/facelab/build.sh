@@ -34,6 +34,10 @@ SKIN_SRCS=$(find "$FW/main/stackchan/avatar/skins" -name '*.cpp')
 # Decorators are overlays (heart, blush, sweat, dizzy) drawn on top of the face --
 # a third of what the robot displays, and easy to forget because no emotion selects them.
 SKIN_SRCS="$SKIN_SRCS $(find "$FW/main/stackchan/avatar/decorators" -name '*.cpp')"
+# The shared face layer: screen size, whole-face state, reactions, skin selection. The
+# harness drives the same code the firmware does rather than carrying its own copy, which
+# is the whole reason this tool can be trusted to agree with the device.
+SKIN_SRCS="$SKIN_SRCS $FW/main/stackchan/face_state.cpp $FW/main/stackchan/face_scene.cpp"
 # The speech bubble's arrow is a compiled-in image asset. It MUST be compiled as C:
 # clang++ treats .c as C++, where a file-scope `const` has internal linkage, so the
 # symbol silently vanishes and the link fails with an undefined reference.

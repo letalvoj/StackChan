@@ -10,7 +10,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LABEL="${1:-$(date +%Y%m%d_%H%M%S)}"
-SKIN="${2:-default}"
+SKIN="${2:-chalk}"
 TMP="$HERE/build/frames"
 OUT="$HERE/out"
 
@@ -35,7 +35,7 @@ while read -r name; do
 done < "$TMP/order.txt"
 
 montage "${TILES[@]}" \
-    -tile 4x -geometry +6+6 -background '#181818' \
+    -tile 6x -geometry +6+6 -background '#181818' \
     "$OUT/grid_${LABEL}.png"
 
 echo "$OUT/grid_${LABEL}.png"
