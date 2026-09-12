@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "servo.h"
+#include "motion_control.h"
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <memory>
@@ -15,7 +16,7 @@ namespace stackchan::motion {
  * @brief
  *
  */
-class Motion {
+class Motion : public MotionControl {
 public:
     Motion(std::unique_ptr<Servo> yawServo, std::unique_ptr<Servo> pitchServo)
         : _yaw_servo(std::move(yawServo)), _pitch_servo(std::move(pitchServo))
@@ -32,7 +33,7 @@ public:
      * @brief
      *
      */
-    void update();
+    void update() override;
 
     /**
      * @brief Get yaw servo instance
@@ -61,7 +62,7 @@ public:
      * @param angle
      * @param speed (0-1000)
      */
-    void moveYawWithSpeed(int angle, int speed);
+    void moveYawWithSpeed(int angle, int speed) override;
 
     /**
      * @brief
@@ -76,7 +77,7 @@ public:
      * @param angle
      * @param speed (0-1000)
      */
-    void movePitchWithSpeed(int angle, int speed);
+    void movePitchWithSpeed(int angle, int speed) override;
 
     /**
      * @brief
@@ -93,20 +94,20 @@ public:
      * @param pitchAngle
      * @param speed (0-1000)
      */
-    void moveWithSpeed(int yawAngle, int pitchAngle, int speed);
+    void moveWithSpeed(int yawAngle, int pitchAngle, int speed) override;
 
     /**
      * @brief Move head to home position (0,0)
      *
      * @param speed (0-1000)
      */
-    void goHome(int speed = 500);
+    void goHome(int speed = 500) override;
 
     /**
      * @brief Stop head movement
      *
      */
-    void stop();
+    void stop() override;
 
     /**
      * @brief Moves the head using normalized coordinates ranging from -1.0 to 1.0.
@@ -148,16 +149,24 @@ public:
      */
     void lookAtPoint(float x, float y, float z, int speed = 500);
 
-    bool isMoving();
-    uitk::Vector2i getCurrentAngles();
-    int getCurrentYawAngle();
-    int getCurrentPitchAngle();
-    void setTorqueEnabled(bool enabled);
-    void setAutoTorqueReleaseEnabled(bool enabled);
-    void setAutoAngleSyncEnabled(bool enabled);
+    bool isMoving() override;
+    uitk::Vector2i getCurrentAngles() override;
+    int getCurrentYawAngle() override;
+    int getCurrentPitchAngle() override;
 
-    void setModifyLock(bool locked);
-    bool isModifyLocked();
+    void setTorqueEnabled(bool enabled) override;
+    void setAutoTorqueReleaseEnabled(bool enabled) override;
+    void setAutoAngleSyncEnabled(bool enabled) override;
+
+    void zeroHere() override;
+    void resetZeroCalibration() override;
+    Motion* hardware() override
+    {
+        return this;
+    }
+
+    void setModifyLock(bool locked) override;
+    bool isModifyLocked() override;
 
 private:
     std::unique_ptr<Servo> _yaw_servo;

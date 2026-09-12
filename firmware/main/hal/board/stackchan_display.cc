@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "stackchan_display.h"
+#include <stackchan/face_scene.h>
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
@@ -257,15 +258,14 @@ void StackChanAvatarDisplay::SetupUI()
 
     ESP_LOGI(TAG, "Creating Stack-chan Avatar...");
 
-    // CuteAvatar is the shipping face. DefaultAvatar is still built and still works --
-    // swap the type here to go back, nothing else changes, because both satisfy the same
-    // Feature contract and every modifier drives them identically.
+    // This is the shipping face. Swapping the Skin here is the whole change, because
+    // createAvatar owns which class and what panel size, and every modifier drives any
+    // skin identically.
     //
-    // Preview either without flashing: tools/facelab/grid.sh <label> {cute|default}
-    auto avatar = std::make_unique<CuteAvatar>();
-    avatar->init(lv_screen_active());
+    // Preview either without flashing: tools/facelab/grid.sh <label> {chalk|default}
+    auto avatar = stackchan::face::createAvatar(lv_screen_active(), stackchan::face::Skin::Chalk);
 
-    // The panel is full-screen and NOT scrollable (see cute.cpp), so LVGL's CLICKED
+    // The panel is full-screen and NOT scrollable (see chalk.cpp), so LVGL's CLICKED
     // event fires on any press-then-release over it regardless of how far the finger
     // travelled in between -- a swipe is, to LVGL, just a click with extra steps.
     //
@@ -283,7 +283,7 @@ void StackChanAvatarDisplay::SetupUI()
     // home-swipe must NOT also register as a tap here.
     static lv_point_t press_point{};
     lv_obj_add_event_cb(
-        avatar->getPanel()->get(),
+        avatar->panel(),
         [](lv_event_t* e) {
             lv_indev_t* indev = lv_indev_active();
             if (indev) {
@@ -292,7 +292,7 @@ void StackChanAvatarDisplay::SetupUI()
         },
         LV_EVENT_PRESSED, nullptr);
 
-    avatar->getPanel()->onClick().connect([]() {
+    stackchan::face::onFaceTapped(*avatar, []() {
         static constexpr int32_t kTapSlopPx = 24;
 
         lv_point_t release_point{};

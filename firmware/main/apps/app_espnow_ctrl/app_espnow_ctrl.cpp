@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_espnow_ctrl.h"
+#include <stackchan/face_scene.h>
 #include "view/page_selector.h"
 #include "view/view.h"
 #include <hal/hal.h>
@@ -72,8 +73,7 @@ void AppEspnowControl::onOpen()
 
     auto& stackchan = GetStackChan();
 
-    auto avatar = std::make_unique<avatar::DefaultAvatar>();
-    avatar->init(lv_screen_active());
+    auto avatar = face::createAvatar(lv_screen_active());
     stackchan.attachAvatar(std::move(avatar));
 
     stackchan.clearModifiers();

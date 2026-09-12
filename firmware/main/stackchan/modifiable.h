@@ -5,7 +5,7 @@
  */
 #pragma once
 #include "avatar/avatar.h"
-#include "motion/motion.h"
+#include "motion/motion_control.h"
 #include "addons/neon_light/neon_light.h"
 #include "utils/object_pool.h"
 
@@ -19,7 +19,10 @@ class Modifiable {
 public:
     virtual ~Modifiable() = default;
 
-    virtual motion::Motion& motion() = 0;
+    /// Narrow on purpose: a modifier drives the head, it does not configure servos.
+    /// Callers that genuinely need the servos reach them through MotionControl::hardware(),
+    /// which is null for a head that has none.
+    virtual motion::MotionControl& motion() = 0;
 
     virtual avatar::Avatar& avatar() = 0;
 

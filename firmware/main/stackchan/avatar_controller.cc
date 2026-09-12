@@ -198,7 +198,7 @@ void AvatarController::SetEmotion(const char* emotion) {
         }
 
         auto& motion = stackchan.motion();
-        motion.pitchServo().moveWithSpeed(0, 80);
+        motion.movePitchWithSpeed(0, 80);
 
     } else if (strcmp(emotion, "doubtful") == 0) {
         avatar.setEmotion(stackchan::avatar::Emotion::Doubt);

@@ -6,6 +6,7 @@
 #pragma once
 #include "../modifiable.h"
 #include "../utils/random.h"
+#include "../face_states.h"
 #include <smooth_ui_toolkit.hpp>
 #include <hal/hal.h>
 #include <cstdint>
@@ -58,8 +59,12 @@ public:
 
         // 嘴巴开合动画
         if (now >= _next_mouth_tick) {
-            _next_mouth_tick = now + _mouth_interval_ms;
             animate_mouth(stackchan.avatar());
+            // A closed beat is shorter than an open one. Alternating on a strict 50/50 is
+            // not how speech looks: the mouth is open for most of a syllable and shut only
+            // between them, and an even split reads as a jaw flapping rather than talking.
+            _next_mouth_tick = now + (_is_mouth_open ? _mouth_interval_ms
+                                                     : _mouth_interval_ms * 2 / 5);
         }
 
         // 身体微动动作
@@ -125,10 +130,10 @@ private:
     }
 
     // 配置常量
-    const int _open_min_weight  = 40;
-    const int _open_max_weight  = 80;
-    const int _close_min_weight = 0;
-    const int _close_max_weight = 20;
+    const int _open_min_weight  = face::kSpeakOpenMin;
+    const int _open_max_weight  = face::kSpeakOpenMax;
+    const int _close_min_weight = face::kSpeakClosedMin;
+    const int _close_max_weight = face::kSpeakClosedMax;
 
     // 计时状态
     uint32_t _destroy_at       = 0;

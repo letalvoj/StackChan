@@ -5,9 +5,11 @@
  */
 #pragma once
 #include "../modifiable.h"
+#include "../face_state.h"
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
 #include <cstdint>
+#include <vector>
 
 namespace stackchan {
 
@@ -43,7 +45,9 @@ public:
 
         // 如果处于晃动反应状态
         if (_is_reacting) {
-            if (now >= _next_toggle_tick) {
+            // A skin whose dizzy overlay includes its own wavy mouth has already drawn one,
+            // and rocking a second mouth underneath it just makes two.
+            if (!_overlay_draws_mouth && now >= _next_toggle_tick) {
                 _next_toggle_tick = now + 600;
 
                 _toggle_phase      = !_toggle_phase;
@@ -82,15 +86,21 @@ private:
             auto& avatar = stackchan.avatar();
 
             avatar.setModifyLock(true);
+            // The spirals stand in for the eyes rather than sitting on top of them. That
+            // substitution is the effect: hiding the eyes first is what makes a spiral
+            // read as an eye instead of as a sticker over one.
             avatar.leftEye().setVisible(false);
             avatar.rightEye().setVisible(false);
 
-            stackchan.avatar().removeDecorator(_dizzy_decorator_id);
-            stackchan.avatar().removeDecorator(_shy_decorator_id);
-            _dizzy_decorator_id =
-                stackchan.avatar().addDecorator(std::make_unique<avatar::DizzyDecorator>(lv_screen_active(), 0, 300));
-            _shy_decorator_id =
-                stackchan.avatar().addDecorator(std::make_unique<avatar::ShyDecorator>(lv_screen_active(), 0));
+            _overlay_draws_mouth = avatar.overlayArt(stackchan::avatar::OverlayKind::DizzyMouth).valid;
+            if (_overlay_draws_mouth) {
+                avatar.mouth().setVisible(false);
+            }
+
+            // What "disoriented" looks like is defined once, in the face layer, so the
+            // preview cannot show a different set of overlays than the device draws.
+            face::detachReaction(avatar, _reaction_ids);
+            _reaction_ids = face::attachReaction(avatar, lv_screen_active(), face::Reaction::Disoriented);
         }
 
         // 刷新恢复时间和切换时间
@@ -108,15 +118,13 @@ private:
 
         auto& avatar = stackchan.avatar();
         avatar.setModifyLock(false);
-        avatar.leftEye().setVisible(true);
-        avatar.rightEye().setVisible(true);
-        avatar.mouth().setWeight(0);
-        avatar.mouth().setRotation(0);
+        // The shake hid the eyes, hid or rocked the mouth, and left a weight behind. One
+        // call puts all of that back rather than four that have to stay in step with it.
+        avatar.resetFeatures();
+        _overlay_draws_mouth = false;
 
-        stackchan.avatar().removeDecorator(_dizzy_decorator_id);
-        stackchan.avatar().removeDecorator(_shy_decorator_id);
-        _dizzy_decorator_id = -1;
-        _shy_decorator_id   = -1;
+        face::detachReaction(avatar, _reaction_ids);
+        _reaction_ids.clear();
 
         auto& motion = stackchan.motion();
         motion.setModifyLock(false);
@@ -131,12 +139,12 @@ private:
     // 状态控制
     bool _is_reacting          = false;
     bool _toggle_phase         = false;
+    bool _overlay_draws_mouth  = false;
     uint32_t _restore_at       = 0;
     uint32_t _next_toggle_tick = 0;
     uint32_t _reaction_duration_ms;
 
-    int _dizzy_decorator_id = -1;
-    int _shy_decorator_id   = -1;
+    std::vector<int> _reaction_ids;
 };
 
 }  // namespace stackchan

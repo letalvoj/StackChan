@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_dance.h"
+#include <stackchan/face_scene.h>
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -53,8 +54,7 @@ void AppDance::onOpen()
     loading_page.reset();
 
     // Create default avatar
-    auto avatar = std::make_unique<avatar::DefaultAvatar>();
-    avatar->init(lv_screen_active());
+    auto avatar = face::createAvatar(lv_screen_active());
     GetStackChan().attachAvatar(std::move(avatar));
 
     /* ------------------------------- BLE events ------------------------------- */

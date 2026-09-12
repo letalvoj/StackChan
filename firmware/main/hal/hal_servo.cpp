@@ -358,4 +358,9 @@ void Hal::servo_init()
     motion->init();
 
     GetStackChan().attachMotion(std::move(motion));
+
+    // The board owns its hardware and hands it over. StackChan defaults to no-op lights,
+    // so the runtime is constructible and drivable without an LED driver behind it.
+    GetStackChan().attachNeonLights(std::make_unique<stackchan::addon::LeftNeonLight>(),
+                                    std::make_unique<stackchan::addon::RightNeonLight>());
 }

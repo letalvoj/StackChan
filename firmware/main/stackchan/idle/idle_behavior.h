@@ -118,7 +118,7 @@ struct Context {
     Modifiable& stackchan;
     uint32_t now_ms;
 
-    motion::Motion& motion() const
+    motion::MotionControl& motion() const
     {
         return stackchan.motion();
     }

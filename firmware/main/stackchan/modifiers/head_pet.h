@@ -5,13 +5,15 @@
  */
 #pragma once
 #include "../modifiable.h"
-#include "../avatar/decorators/decorators.h"
+#include "../face_state.h"
 #include "../utils/random.h"
+#include "../face_states.h"
 #include <smooth_ui_toolkit.hpp>
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace stackchan {
 
@@ -75,6 +77,7 @@ private:
         if (!_in_happy_state) {
             _in_happy_state = true;
             _prev_emotion   = avatar.getEmotion();
+            _prev_mouth_weight = avatar.mouth().getWeight();
             auto angles     = stackchan.motion().getCurrentAngles();
             _prev_yaw       = angles.x;
             _prev_pitch     = angles.y;
@@ -82,14 +85,13 @@ private:
 
         // 视觉反馈
         avatar.setEmotion(avatar::Emotion::Happy);
+        avatar.mouth().setWeight(face::kMouthMedium);
 
         // 添加爱心装饰
+        // What "being petted" looks like is defined once, in the face layer.
         int duration = Random::getInstance().getInt(1500, 2500);
-        avatar.removeDecorator(_heart_decorator_id);
-        avatar.removeDecorator(_shy_decorator_id);
-        _heart_decorator_id =
-            avatar.addDecorator(std::make_unique<avatar::HeartDecorator>(lv_screen_active(), duration, 500));
-        _shy_decorator_id = avatar.addDecorator(std::make_unique<avatar::ShyDecorator>(lv_screen_active(), duration));
+        face::detachReaction(avatar, _reaction_ids);
+        _reaction_ids = face::attachReaction(avatar, lv_screen_active(), face::Reaction::HeadPet, duration);
 
         // Let a connected agent know it was touched, so being petted can be something it
         // reacts to in conversation rather than only something the face draws.
@@ -106,6 +108,10 @@ private:
         }
 
         stackchan.avatar().setEmotion(_prev_emotion);
+        // Restore our mouth pose only if another modifier has not taken over speech.
+        if (stackchan.avatar().mouth().getWeight() == face::kMouthMedium) {
+            stackchan.avatar().mouth().setWeight(_prev_mouth_weight);
+        }
         stackchan.motion().moveWithSpeed(_prev_yaw, _prev_pitch, 200);
 
         _in_happy_state = false;
@@ -155,11 +161,11 @@ private:
     bool _is_waiting_restore = false;
     uint32_t _restore_tick   = 0;
     uint32_t _restore_delay_ms;
-    int _heart_decorator_id = -1;
-    int _shy_decorator_id   = -1;
+    std::vector<int> _reaction_ids;
 
     // 记忆相关
     avatar::Emotion _prev_emotion = avatar::Emotion::Neutral;
+    int _prev_mouth_weight        = 0;
     int32_t _prev_yaw             = 0;
     int32_t _prev_pitch           = 0;
 };

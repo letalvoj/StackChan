@@ -6,6 +6,7 @@
 #pragma once
 #include "../modifiable.h"
 #include "../utils/random.h"
+#include "../face_states.h"
 #include <hal/hal.h>
 #include <cstdint>
 
@@ -54,7 +55,7 @@ public:
         // 1. 处理销毁逻辑
         if (_has_lifetime && now >= _destroy_at) {
             // 销毁前确保眼睛是睁开的
-            if (_state == State::CLOSED) {
+            if (_state != State::OPEN) {
                 apply_eye_weights(stackchan, _left_eye_weight, _right_eye_weight);
             }
             requestDestroy();
@@ -72,15 +73,20 @@ public:
         // 3. 状态机切换逻辑
         if (now >= _next_state_tick) {
             if (_state == State::OPEN) {
-                // 睁眼 -> 闭眼
-                _state           = State::CLOSED;
-                _next_state_tick = now + _close_interval_ms;
-
                 // 闭眼瞬间，先备份当前权重（以防外部中途修改了权重）
                 _left_eye_weight  = stackchan.avatar().leftEye().getWeight();
                 _right_eye_weight = stackchan.avatar().rightEye().getWeight();
 
-                apply_eye_weights(stackchan, 25, 25);
+                // The lid passes through a half-closed step on the way down. A blink that
+                // snaps straight from open to shut loses the drawing the artist made for
+                // exactly this moment, and reads as the eye being switched off.
+                apply_eye_weights(stackchan, face::kBlinkHalfWeight, face::kBlinkHalfWeight);
+                _state           = State::HALF;
+                _next_state_tick = now + _half_interval_ms;
+            } else if (_state == State::HALF) {
+                _state           = State::CLOSED;
+                _next_state_tick = now + _close_interval_ms;
+                apply_eye_weights(stackchan, face::kBlinkClosedWeight, face::kBlinkClosedWeight);
             } else {
                 // 闭眼 -> 睁眼
                 _state = State::OPEN;
@@ -94,7 +100,7 @@ public:
     }
 
 private:
-    enum class State { OPEN, CLOSED };
+    enum class State { OPEN, HALF, CLOSED };
 
     void apply_eye_weights(Modifiable& stackchan, int left, int right)
     {
@@ -106,6 +112,7 @@ private:
     uint32_t _next_state_tick = 0;
     uint32_t _open_interval_ms;
     uint32_t _close_interval_ms;
+    uint32_t _half_interval_ms = 45;
 
     uint32_t _destroy_at  = 0;
     bool _has_lifetime    = false;

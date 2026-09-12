@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_avatar.h"
+#include <stackchan/face_scene.h>
 #include "view/ws_call.h"
 #include <hal/hal.h>
 #include <mooncake.h>
@@ -84,9 +85,8 @@ void AppAvatar::onOpen()
     loading_page.reset();
 
     // Create default avatar
-    auto avatar = std::make_unique<avatar::DefaultAvatar>();
-    avatar->init(lv_screen_active());
-    avatar->getPanel()->onClick().connect([&]() { _screen_clicked_flag = true; });
+    auto avatar = face::createAvatar(lv_screen_active());
+    face::onFaceTapped(*avatar, [&]() { _screen_clicked_flag = true; });
     GetStackChan().attachAvatar(std::move(avatar));
 
     /* ------------------------------- BLE events ------------------------------- */

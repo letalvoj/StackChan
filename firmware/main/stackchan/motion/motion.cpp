@@ -135,3 +135,15 @@ bool Motion::isModifyLocked()
 {
     return _is_modify_locked;
 }
+
+void Motion::zeroHere()
+{
+    _yaw_servo->setCurrentAngleAsZero();
+    _pitch_servo->setCurrentAngleAsZero();
+}
+
+void Motion::resetZeroCalibration()
+{
+    _yaw_servo->resetZeroCalibration();
+    _pitch_servo->resetZeroCalibration();
+}

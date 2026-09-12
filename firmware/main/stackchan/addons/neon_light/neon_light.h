@@ -77,4 +77,21 @@ private:
     void refresh_rgb_impl() override;
 };
 
+/**
+ * @brief A light with nothing behind it.
+ *
+ * StackChan used to own the two board lights by value, which quietly made the whole
+ * runtime un-constructible without the LED driver -- the same coupling that concrete
+ * Motion had. The board attaches the real ones; until it does, this stands in so callers
+ * never hold a dangling reference and no caller needs a null check.
+ */
+class NullNeonLight : public NeonLight {
+public:
+    NullNeonLight() : NeonLight(0) {}
+
+private:
+    void set_rgb_color_impl(uint8_t, uint8_t, uint8_t, uint8_t) override {}
+    void refresh_rgb_impl() override {}
+};
+
 }  // namespace stackchan::addon
