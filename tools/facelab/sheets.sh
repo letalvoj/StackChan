@@ -59,7 +59,9 @@ def labelled(src, caption, dst):
                     "-bordercolor", "#303030", "-border", "1",
                     "-background", "#101010", "-fill", "#e0e0e0", "-pointsize", "15",
                     f"label:{caption}", "+swap", "-gravity", "center", "-append",
-                    str(dst)], check=True)
+                    # The label brings its own small canvas along. A still viewer ignores
+                    # it; anything that composites or animates these honours it and crops.
+                    "+repage", str(dst)], check=True)
     return str(dst)
 
 
@@ -83,7 +85,7 @@ for seq, entries in frames.items():
     subprocess.run(["magick", str(body),
                     "-background", "#181818", "-fill", "#e0e0e0", "-pointsize", "20",
                     f"label:{seq} — {captions.get(seq, '')}",
-                    "+swap", "-gravity", "west", "-append", str(strip)], check=True)
+                    "+swap", "-gravity", "west", "-append", "+repage", str(strip)], check=True)
     strips.append(str(strip))
 
     # GIF delays are centiseconds, so each frame's reported hold is converted rather than

@@ -252,6 +252,7 @@ struct Tile {
 static const struct { const char* n; Emotion e; } kEmotions[] = {
     {"neutral", Emotion::Neutral}, {"happy", Emotion::Happy}, {"angry", Emotion::Angry},
     {"sad", Emotion::Sad},         {"doubt", Emotion::Doubt}, {"sleepy", Emotion::Sleepy},
+    {"laugh", Emotion::Laugh},
 };
 
 static std::vector<Tile> buildTiles()
@@ -392,6 +393,33 @@ static std::vector<Performance> buildPerformances()
     v.push_back(talking("talk-angry",   Emotion::Angry,   "SpeakingModifier, angry"));
     v.push_back(talking("talk-sad",     Emotion::Sad,     "SpeakingModifier, sad"));
     v.push_back(talking("talk-doubt",   Emotion::Doubt,   "SpeakingModifier, doubt"));
+
+    // --- the laugh, as laugh.sh compares it against the artist -----------------------
+    // Nothing armed: setting the emotion is what starts the burst, so this is the firmware
+    // playing the artist's performance on its own. Captured on every 33 ms update tick, the
+    // burst's first frame lands on capture 0, which is what lets laugh.sh put each capture
+    // beside the artist's frame at exactly the same millisecond.
+    {
+        Performance p;
+        p.name         = "laugh";
+        p.caption      = "Emotion::Laugh set, nothing else";
+        p.base.emotion = Emotion::Laugh;
+        p.frame_ms     = 33;
+        p.frames       = 90;
+        v.push_back(p);
+    }
+    // Talking while laughing: the speech amplitude walks the six laugh drawings, and each
+    // one brings its own eyes and cheeks.
+    {
+        Performance p  = talking("talk-laugh", Emotion::Laugh, "SpeakingModifier, laughing");
+        p.arm          = [](PreviewChan& c) {
+            c.add<SpeakingModifier>(0, 180, false);
+            c.add<BlinkModifier>(0, 900, 200);    // shut eyes must not pop open on a blink
+        };
+        p.frame_ms     = 120;
+        p.frames       = 30;
+        v.push_back(p);
+    }
 
     // --- talking and blinking together --------------------------------------------
     // The two tracks own different features and must not fight. Running both is the only

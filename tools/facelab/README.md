@@ -10,7 +10,16 @@ designed is the face the robot will show.
 ./grid.sh mine chalk          # out/grid_mine.png     — the shipping face
 ./grid.sh ref default         # out/grid_ref.png      — the legacy face, to diff against
 ./compare.sh chalk            # out/compare_chalk.png — ours against the artist's SVG
+./sheets.sh chalk             # out/sheets/chalk/     — matrices, behaviour strips and GIFs, every baked family
+./astra.sh                    # out/astra/            — our six panels beside the artist's independent-motion.gif
+./laugh.sh                    # out/laugh/            — our laugh beside the artist's, millisecond for millisecond
 ```
+
+`astra.sh` and `laugh.sh` read the frames `sheets.sh` renders, so run that first. They
+answer different questions. The Astra panels run on the modifiers' random timers, so only the
+*character* of the motion can match. The laugh is a scripted performance started by setting
+the emotion, so every capture has an exact counterpart in the artist's GIF. `laugh.sh`
+prints the per-region ink difference at each moment.
 
 `compare.sh` is the one that answers "did the port drift". It renders each `face-*` straight
 out of the artist's repository-local `tools/facegen/artwork/robot-face.svg` with the size and eye-width settings the sprite baker uses and stacks it
@@ -18,7 +27,7 @@ directly above our frame. A misaligned pair is a bug you can see.
 
 ## What it covers
 
-The six firmware emotions, the modifier states on top of them (blink, half-blink, three
+The seven firmware emotions (laugh included), the modifier states on top of them (blink, half-blink, three
 mouth openings, happy-talk), the six decorator overlays, and — because the face spends most
 of its life here and none of it used to be reviewed — idle gaze, idle drift, breath, the
 sleepy speech bubble, and the panic dance pose.
@@ -52,7 +61,8 @@ Implement it under `firmware/main/stackchan/avatar/skins/<name>/`, override `anc
 in `render_faces.cpp`. Every skin satisfies the same `Avatar` interface, which is the
 property the harness exists to check as much as the drawing is.
 
-The chalk skin's artwork is generated: `python3 tools/facegen/gen_sprites.py` bakes each
-placed path from the artist's SVG into an alpha sprite. Do not hand-edit `chalk_sprites.*`.
+The chalk skin's artwork is generated: `python3 tools/facegen/gen_clips.py` bakes the
+expression pack and the laugh extension, every frame of every family, into alpha sprites
+with the artist's own timing. Do not hand-edit `chalk_clips.*`.
 
 Sizing and roundness are configured in `tools/facegen/gen_sprites.py`; see `tools/facegen/README.md`. The reference comparison applies both settings. Additional `check-*.bmp` frames cover moving decorators and extreme gaze.
