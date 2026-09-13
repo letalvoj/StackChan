@@ -104,6 +104,7 @@ void DefaultEyes::setEmotion(const Emotion& emotion)
             apply_style(100, 0);
             break;
         case Emotion::Happy:
+        case Emotion::Laugh:    // this skin draws no laugh of its own; a smile is the nearest
             apply_style(72, 1550);
             break;
         case Emotion::Angry:

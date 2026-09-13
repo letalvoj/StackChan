@@ -46,24 +46,40 @@ void ChalkEyes::refresh()
 {
     const art::EmotionClips& clips = art::clipsFor(_emotion);
     const art::Clip* emotionClip   = _is_left_eye ? clips.eyesLeft : clips.eyesRight;
+    uint8_t emotionFrame           = clips.eyesRestFrame;
     const art::Clip* blinkClip     = _is_left_eye ? &art::clip_eyes_blink_left
                                                   : &art::clip_eyes_blink_right;
+
+    // While a laughing mouth leads, it chooses the eye: the artist paired every laugh
+    // mouth with its own squeeze, up to the > < on each "ha".
+    if (_lead) {
+        emotionClip  = _is_left_eye ? _lead->eyesLeft : _lead->eyesRight;
+        emotionFrame = _lead->eyesFrame;
+    }
+
+    // A blink lowers a lid, and an eye the artist drew already shut has none to lower. The
+    // pack marks those frames by giving neither eye a pupil -- the smile squeeze, the laugh's
+    // > <, the sleepy droop. Borrowing the round blink lids for one of those drew a
+    // half-open eye for a moment, so a laughing face appeared to pop its eyes open on every
+    // blink. Such an eye simply stays as drawn.
+    const bool drawnShut = !art::pupilVisible(emotionClip, emotionFrame, true) &&
+                           !art::pupilVisible(emotionClip, emotionFrame, false);
 
     // A blink borrows the lids and hands them back. The art direction asks for exactly
     // this: the blink temporarily replaces the lids and returns to the emotional eye.
     bool showPupil = true;
-    if (_weight < kClosedBelow) {
+    if (!drawnShut && _weight < kClosedBelow) {
         _shell->hold(blinkClip, kBlinkClosedFrame);
         showPupil = false;
-    } else if (_weight < kHalfBelow) {
+    } else if (!drawnShut && _weight < kHalfBelow) {
         _shell->hold(blinkClip, kBlinkHalfFrame);
         showPupil = false;
     } else {
-        _shell->hold(emotionClip, clips.eyesRestFrame);
+        _shell->hold(emotionClip, emotionFrame);
         // Whether a pupil belongs on this frame is the artist's call, recorded per frame
         // in the pack: an arc or a narrowed dome has no white to put one in, and the
         // asymmetric curious frames drop one side deliberately.
-        showPupil = art::pupilVisible(emotionClip, clips.eyesRestFrame, _is_left_eye);
+        showPupil = art::pupilVisible(emotionClip, emotionFrame, _is_left_eye);
     }
 
     _shell->setVisible(_visible);
@@ -95,10 +111,33 @@ void ChalkEyes::setWeight(int weight)
 void ChalkEyes::setPosition(const uitk::Vector2i& position)
 {
     Element::setPosition(position);
+    place();
+}
+
+void ChalkEyes::setLead(const art::ClipCompanion* lead)
+{
+    if (lead == _lead) {
+        return;
+    }
+    _lead = lead;
+    refresh();
+}
+
+void ChalkEyes::setFaceY(int dy)
+{
+    if (dy == _face_y) {
+        return;
+    }
+    _face_y = dy;
+    place();
+}
+
+void ChalkEyes::place()
+{
     const int dx = map_range(_position.x, -100, 100, -kPositionRangeX, kPositionRangeX);
     const int dy = map_range(_position.y, -100, 100, -kPositionRangeY, kPositionRangeY);
 
-    _shell->setOffset(dx, dy);
+    _shell->setOffset(dx, dy + _face_y);
     setGaze(_gaze);   // the pupil rides on the eye
 }
 
@@ -118,7 +157,7 @@ void ChalkEyes::setGaze(const uitk::Vector2i& gaze)
     const lv_point_t anchor = _is_left_eye ? art::kAnchor_eye_left : art::kAnchor_eye_right;
     _pupil->setImage(art::pupil.dsc, anchor.x + art::pupil.cx, anchor.y + art::pupil.cy,
                      ChalkAvatar::kInk);
-    _pupil->setOffset(eye_dx + gx, eye_dy + gy);
+    _pupil->setOffset(eye_dx + gx, eye_dy + gy + _face_y);
 }
 
 void ChalkEyes::setRotation(int rotation)

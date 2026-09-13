@@ -78,8 +78,37 @@ void ChalkMouth::setEmotion(const Emotion& emotion)
     if (getIgnoreEmotion()) {
         return;
     }
-    _emotion = emotion;
+    // Being told the emotion it already has is not a reason to cut short what the mouth is
+    // doing. A client re-sends "laughing" with every sentence, and snapping back to rest
+    // each time would chop the laugh off in its first burst.
+    if (emotion == _emotion && _flickering) {
+        return;
+    }
+    const bool changed = emotion != _emotion;
+    _emotion           = emotion;
+    if (changed) {
+        _flickering    = false;
+        _idle_on_enter = art::clipsFor(_emotion).mouthIdleOnEnter;
+    }
     refresh();
+}
+
+const art::ClipCompanion* ChalkMouth::lead() const
+{
+    const art::Clip* clip = _track->clip();
+    if (!clip || !clip->companions || _track->frame() >= clip->frameCount) {
+        return nullptr;
+    }
+    return &clip->companions[_track->frame()];
+}
+
+void ChalkMouth::setFaceY(int dy)
+{
+    if (dy == _face_y) {
+        return;
+    }
+    _face_y = dy;
+    place();
 }
 
 void ChalkMouth::setWeight(int weight)
@@ -91,9 +120,14 @@ void ChalkMouth::setWeight(int weight)
 void ChalkMouth::setPosition(const uitk::Vector2i& position)
 {
     Element::setPosition(position);
+    place();
+}
+
+void ChalkMouth::place()
+{
     const int dx = map_range(_position.x, -100, 100, -kPositionRangeX, kPositionRangeX);
     const int dy = map_range(_position.y, -100, 100, -kPositionRangeY, kPositionRangeY);
-    _track->setOffset(dx, dy);
+    _track->setOffset(dx, dy + _face_y);
 }
 
 void ChalkMouth::setRotation(int rotation)
@@ -140,6 +174,15 @@ void ChalkMouth::_update()
         return;
     }
 
+    if (_idle_on_enter && clips.mouthIdle) {
+        // Played directly rather than by making the scheduled time "now": a clock that
+        // reads zero -- the preview's, at its first frame -- is indistinguishable from "not
+        // scheduled yet" below, and the laugh would wait out a whole quiet gap first.
+        _idle_on_enter = false;
+        _flickering    = true;
+        _track->play(clips.mouthIdle, now, ClipTrack::Mode::Once);
+        return;
+    }
     if (_next_flicker_ms == 0) {
         scheduleFlicker(now);
         return;

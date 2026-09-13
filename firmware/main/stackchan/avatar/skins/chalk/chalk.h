@@ -122,11 +122,19 @@ public:
         return _emotion;
     }
 
+    /// Let a mouth frame choose this eye's drawing, or null to go back to the emotion's own.
+    void setLead(const chalk::ClipCompanion* lead);
+    /// Whole-face vertical lift, in panel pixels.
+    void setFaceY(int dy);
+
 private:
     void refresh();
+    void place();
 
     bool _is_left_eye = true;
     Emotion _emotion  = Emotion::Neutral;
+    const chalk::ClipCompanion* _lead = nullptr;
+    int _face_y                       = 0;
 
     std::unique_ptr<ClipTrack> _shell;
     std::unique_ptr<Sprite> _pupil;
@@ -151,11 +159,21 @@ public:
         return _emotion;
     }
 
+    /// What the rest of the face should do for the mouth frame showing now, or null when
+    /// this mouth leads nothing -- which is every mouth except a laugh.
+    const chalk::ClipCompanion* lead() const;
+    /// Whole-face vertical lift, in panel pixels.
+    void setFaceY(int dy);
+
 private:
     void refresh();
+    void place();
 
     Emotion _emotion = Emotion::Neutral;
     std::unique_ptr<ClipTrack> _track;
+    int _face_y = 0;
+    /// Set when an emotion wants its idle family played at once rather than after a gap.
+    bool _idle_on_enter = false;
 
     /// A resting mouth is not a still mouth. The artist marks the quiet families
     /// "occasional, not continuous", so one is played through now and then and the mouth
@@ -203,7 +221,15 @@ private:
     std::unique_ptr<ClipTrack> _cheek_r;
     bool _blushing = false;
 
+    // The features are owned by the base as plain Features; the skin keeps typed handles so
+    // the mouth can lead the eyes without a cast on every frame.
+    ChalkEyes* _eye_l                 = nullptr;
+    ChalkEyes* _eye_r                 = nullptr;
+    ChalkMouth* _mouth                = nullptr;
+    const chalk::ClipCompanion* _lead = nullptr;
+
     void applyCheeks();
+    void follow(const chalk::ClipCompanion* lead);
 };
 
 }  // namespace stackchan::avatar

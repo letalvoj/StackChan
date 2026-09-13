@@ -154,6 +154,30 @@ static EmotionClips makeSleepy()
     return e;
 }
 
+static EmotionClips makeLaugh()
+{
+    // Almost everything here is led by the mouth. Each laugh mouth frame carries the eyes,
+    // cheeks and face lift the artist paired with it (see ClipCompanion), so the values set
+    // below are only what shows before the first mouth frame is placed -- and they are the
+    // grin's own pairing, so there is no visible hand-over.
+    EmotionClips e   = makeHappy();
+    e.eyesLeft       = &clip_eyes_laugh_left;
+    e.eyesRight      = &clip_eyes_laugh_right;
+    e.eyesRestFrame  = 0;                        // the soft squeeze the grin wears
+    e.mouthRest      = &clip_mouth_laugh;
+    e.mouthRestFrame = 0;                        // grin
+    // Talking while laughing walks the six laugh drawings by amplitude, so a loud syllable
+    // lands on "haa" and brings the > < eyes with it.
+    e.mouthSpeech    = &clip_mouth_laugh;
+    // Silent, the face performs the artist's burst: two uneven bursts and a recovery.
+    e.mouthIdle      = &clip_mouth_laugh_burst;
+    e.mouthIdleOnEnter = true;
+    e.cheeksRestFrame = 2;
+    e.openness       = clip_mouth_laugh_openness;
+    e.opennessCount  = clip_mouth_laugh_opennessCount;
+    return e;
+}
+
 const EmotionClips& clipsFor(Emotion emotion)
 {
     static const EmotionClips kNeutral = makeNeutral();
@@ -162,6 +186,7 @@ const EmotionClips& clipsFor(Emotion emotion)
     static const EmotionClips kSad     = makeSad();
     static const EmotionClips kDoubt   = makeDoubt();
     static const EmotionClips kSleepy  = makeSleepy();
+    static const EmotionClips kLaugh   = makeLaugh();
 
     switch (emotion) {
         case Emotion::Happy:  return kHappy;
@@ -169,6 +194,7 @@ const EmotionClips& clipsFor(Emotion emotion)
         case Emotion::Sad:    return kSad;
         case Emotion::Doubt:  return kDoubt;
         case Emotion::Sleepy: return kSleepy;
+        case Emotion::Laugh:  return kLaugh;
         case Emotion::Neutral:
         default:              return kNeutral;
     }

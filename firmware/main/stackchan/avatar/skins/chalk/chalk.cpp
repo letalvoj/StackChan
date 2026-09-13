@@ -136,7 +136,13 @@ bool ClipTrack::advance(uint32_t now)
     } else {
         _frame = next;
     }
-    _next_tick = now + _clip->holdMs[_frame];
+    // Due times are measured from when this frame was *due*, not from the tick that noticed.
+    // Counting from `now` added each update's lateness to every hold after it, so a nine-beat
+    // laugh at a 33 ms update ran up to ~300 ms long and its bursts lost their shape. If the
+    // track has fallen behind by a whole hold -- a stalled loop -- it shows this frame for
+    // its full hold rather than racing through the ones it missed.
+    const uint32_t planned = _next_tick + _clip->holdMs[_frame];
+    _next_tick             = (planned > now) ? planned : now + _clip->holdMs[_frame];
     show();
     return true;
 }
@@ -186,9 +192,15 @@ void ChalkAvatar::init(lv_obj_t* parent, const lv_font_t* font)
     _cheek_l = std::make_unique<ClipTrack>(p, 1);
     _cheek_r = std::make_unique<ClipTrack>(p, 1);
 
-    _key_elements.leftEye  = std::make_unique<ChalkEyes>(p, true);
-    _key_elements.rightEye = std::make_unique<ChalkEyes>(p, false);
-    _key_elements.mouth    = std::make_unique<ChalkMouth>(p);
+    auto leftEye  = std::make_unique<ChalkEyes>(p, true);
+    auto rightEye = std::make_unique<ChalkEyes>(p, false);
+    auto mouth    = std::make_unique<ChalkMouth>(p);
+    _eye_l        = leftEye.get();
+    _eye_r        = rightEye.get();
+    _mouth        = mouth.get();
+    _key_elements.leftEye  = std::move(leftEye);
+    _key_elements.rightEye = std::move(rightEye);
+    _key_elements.mouth    = std::move(mouth);
 
     // Reuse the default bubble: it is a text container, orthogonal to the face's look, and
     // duplicating it would mean maintaining two.
@@ -208,6 +220,34 @@ void ChalkAvatar::setEmotion(const Emotion& emotion)
     _brow_r->hold(clips.browsRight, clips.browsRestFrame);
 
     Avatar::setEmotion(emotion);
+    // The mouth has just taken its new resting frame. Follow it now rather than at the next
+    // update, or the old emotion's lead -- a laugh's > < eyes -- survives into the frame
+    // that draws the new one.
+    follow(_mouth ? _mouth->lead() : nullptr);
+    applyCheeks();
+}
+
+void ChalkAvatar::follow(const art::ClipCompanion* lead)
+{
+    if (lead == _lead || !_eye_l || !_eye_r || !_mouth) {
+        return;
+    }
+    _lead = lead;
+
+    _eye_l->setLead(lead);
+    _eye_r->setLead(lead);
+
+    // The artist lifts and drops the whole face a pixel or three with each burst. Every part
+    // takes the same offset, so the face moves as one thing instead of coming apart.
+    const int dy = lead ? lead->faceY : 0;
+    _eye_l->setFaceY(dy);
+    _eye_r->setFaceY(dy);
+    _mouth->setFaceY(dy);
+    _brow_l->setOffset(0, dy);
+    _brow_r->setOffset(0, dy);
+    _cheek_l->setOffset(0, dy);
+    _cheek_r->setOffset(0, dy);
+
     applyCheeks();
 }
 
@@ -231,6 +271,12 @@ void ChalkAvatar::applyCheeks()
         _cheek_r->hold(&art::clip_cheeks_warm_blush_right, 3);
         return;
     }
+    // A laughing mouth chooses the cheeks too: they lift furthest on the widest "ha".
+    if (_lead) {
+        _cheek_l->hold(_lead->cheeksLeft, _lead->cheeksFrame);
+        _cheek_r->hold(_lead->cheeksRight, _lead->cheeksFrame);
+        return;
+    }
     const art::EmotionClips& clips = art::clipsFor(_emotion);
     _cheek_l->hold(clips.cheeksLeft, clips.cheeksRestFrame);
     _cheek_r->hold(clips.cheeksRight, clips.cheeksRestFrame);
@@ -247,6 +293,10 @@ void ChalkAvatar::update()
     _cheek_r->advance(now);
 
     Avatar::update();
+
+    // After the features have advanced, so the rest of the face follows the mouth frame that
+    // is actually showing, not the one before it.
+    follow(_mouth ? _mouth->lead() : nullptr);
 }
 
 FaceAnchors ChalkAvatar::anchors() const

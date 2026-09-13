@@ -1,0 +1,84 @@
+{
+  "kind": "laugh event; preview repeats with a resting hold",
+  "duration_ms": 2700,
+  "mouth_anchor": [
+    160,
+    161
+  ],
+  "eyes_anchor": [
+    160,
+    100
+  ],
+  "cheeks_anchor": [
+    160,
+    140
+  ],
+  "scale": 1.5,
+  "pupils": "hidden during squeezed eyes",
+  "interpolation": "discrete held drawings; no path morph",
+  "sequence": [
+    {
+      "mouth": "mouth-laugh-00-grin",
+      "eyes": "eyes-smile-squeeze-02",
+      "cheeks": "cheeks-smile-lift-02",
+      "face_y": 0,
+      "hold_ms": 600
+    },
+    {
+      "mouth": "mouth-laugh-01-catch",
+      "eyes": "eyes-smile-squeeze-03",
+      "cheeks": "cheeks-smile-lift-03",
+      "face_y": 1,
+      "hold_ms": 160
+    },
+    {
+      "mouth": "mouth-laugh-02-ha",
+      "eyes": "eyes-laugh-squeeze-peak",
+      "cheeks": "cheeks-smile-lift-04",
+      "face_y": -2,
+      "hold_ms": 140
+    },
+    {
+      "mouth": "mouth-laugh-03-hee",
+      "eyes": "eyes-smile-squeeze-03",
+      "cheeks": "cheeks-smile-lift-04",
+      "face_y": 1,
+      "hold_ms": 100
+    },
+    {
+      "mouth": "mouth-laugh-04-haa",
+      "eyes": "eyes-laugh-squeeze-peak",
+      "cheeks": "cheeks-smile-lift-04",
+      "face_y": -3,
+      "hold_ms": 180
+    },
+    {
+      "mouth": "mouth-laugh-03-hee",
+      "eyes": "eyes-smile-squeeze-03",
+      "cheeks": "cheeks-smile-lift-04",
+      "face_y": 1,
+      "hold_ms": 120
+    },
+    {
+      "mouth": "mouth-laugh-02-ha",
+      "eyes": "eyes-laugh-squeeze-peak",
+      "cheeks": "cheeks-smile-lift-04",
+      "face_y": -1,
+      "hold_ms": 140
+    },
+    {
+      "mouth": "mouth-laugh-05-settle",
+      "eyes": "eyes-smile-squeeze-03",
+      "cheeks": "cheeks-smile-lift-03",
+      "face_y": 1,
+      "hold_ms": 260
+    },
+    {
+      "mouth": "mouth-laugh-00-grin",
+      "eyes": "eyes-smile-squeeze-02",
+      "cheeks": "cheeks-smile-lift-02",
+      "face_y": 0,
+      "hold_ms": 1000
+    }
+  ]
+}

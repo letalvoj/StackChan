@@ -27,6 +27,25 @@ struct ClipLayer {
     uint32_t color;
 };
 
+struct Clip;
+
+/// What the rest of the face does while one mouth frame is showing.
+///
+/// Most mouths leave the face alone. A laugh does not: the artist drew it as one
+/// performance, and a "ha" always wears the > < squeeze and lifted cheeks, a "catch"
+/// the softer arc. Pairing them per mouth frame keeps the face coherent however the
+/// mouth got there -- played as a burst, or walked by a speech amplitude.
+struct ClipCompanion {
+    const Clip* eyesLeft;
+    const Clip* eyesRight;
+    uint8_t eyesFrame;
+    const Clip* cheeksLeft;
+    const Clip* cheeksRight;
+    uint8_t cheeksFrame;
+    /// Whole-face vertical lift in panel pixels, negative is up.
+    int8_t faceY;
+};
+
 /// A drawn motion family: layers to stack, and how long each frame is held.
 struct Clip {
     const ClipLayer* layers;
@@ -36,6 +55,8 @@ struct Clip {
     /// narrowed dome has no white to put a pupil in, and the curious frames drop
     /// one side on purpose.
     const uint8_t* pupils;
+    /// Per frame, what the rest of the face does. Null for a mouth that leads nothing.
+    const ClipCompanion* companions;
     uint8_t layerCount;
     uint8_t frameCount;
 };
@@ -105,6 +126,14 @@ extern const Clip clip_accents_heart_pulse;
 extern const Clip clip_accents_dizzy_spin;
 extern const Clip clip_accents_sweat_slip;
 extern const Clip clip_accents_anger_twitch;
+extern const uint8_t clip_mouth_laugh_openness[];
+static constexpr uint8_t clip_mouth_laugh_opennessCount = 6;
+extern const Clip clip_mouth_laugh;
+extern const uint8_t clip_mouth_laugh_burst_openness[];
+static constexpr uint8_t clip_mouth_laugh_burst_opennessCount = 9;
+extern const Clip clip_mouth_laugh_burst;
+extern const Clip clip_eyes_laugh_left;
+extern const Clip clip_eyes_laugh_right;
 
 /// The pupil, placed by the skin rather than drawn per frame: every gaze frame
 /// in the pack is this same dot translated, and a continuous offset covers all of
@@ -135,6 +164,6 @@ struct NamedClip {
     const Clip* clip;
 };
 extern const NamedClip kAllClips[];
-static constexpr int kAllClipCount = 39;
+static constexpr int kAllClipCount = 43;
 
 }  // namespace stackchan::avatar::chalk

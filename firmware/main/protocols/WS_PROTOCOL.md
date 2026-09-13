@@ -237,7 +237,7 @@ All JSON frames carry `"session_id"` and `"type"`.
 | `hello` | `transport: "websocket"`<br>`session_id: "<string>"`<br>`audio_params: { sample_rate, frame_duration }` | Required handshake reply to device `hello`. Establishes active session ID. |
 | `tts` | `state: "start"\|"stop"\|"sentence_start"`<br>`text: "<subtitle>"` *(on sentence_start)* | Drives speech state: `start` sets device to `speaking` (enabling audio decode); `stop` returns to `listening`/`idle`; `sentence_start` displays subtitle text in avatar speech bubble. |
 | `stt` | `text: "<user transcript>"` | Displays transcribed user speech in the chat message interface. |
-| `llm` | `emotion: "<emotion_name>"` | Sets avatar facial expression. Supported: `neutral`, `happy`, `laughing`, `angry`, `sad`, `crying`, `sleepy`, `doubtful`. |
+| `llm` | `emotion: "<emotion_name>"` | Sets avatar facial expression. Supported: `neutral`, `happy`, `laughing`, `angry`, `sad`, `crying`, `sleepy`, `doubtful`. `laughing` is a distinct expression, not an alias for `happy`: it plays a short laugh as soon as it is set, and laughs while talking. `crying` is still an alias for `sad`. |
 | `mcp` | `payload: { ... }` | Encapsulates JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`) to the MCP server. |
 | `system` | `command: "reboot"` | Executes system management commands (`reboot` triggers `esp_restart()`). |
 | `alert` | `status: "<title>"`, `message: "<body>"`, `emotion: "<name>"` | Displays modal alert overlay with specified emotion. |

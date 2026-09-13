@@ -23,6 +23,12 @@ Three things this does that the single-pose baker did not:
 
 Timing comes from the artist's timing-and-anchors.json, never from a number typed here.
 
+The laugh extension (artwork/laugh-2026-09-13) is baked alongside the pack. It is not a
+family per track like the rest: it is a performance, where each mouth drawing is paired with
+the eyes, cheeks and face lift the artist drew for that instant -- a "ha" always wears the
+> < squeeze. So its mouth clips carry *companions*, and whichever mouth frame is showing
+tells the rest of the face what to do. laugh-timing.json is the only source for all of it.
+
     ./gen_clips.py            # writes chalk_clips.{h,cpp} into the chalk skin
 """
 
@@ -41,6 +47,7 @@ SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
 
 PACK = pathlib.Path(__file__).resolve().parent / "artwork/pack-2026-09-12"
+LAUGH = pathlib.Path(__file__).resolve().parent / "artwork/laugh-2026-09-13"
 OUT = pathlib.Path(__file__).resolve().parents[2] / "firmware/main/stackchan/avatar/skins/chalk"
 
 # The pack's own local viewport. Frames are drawn around an origin inside this box.
@@ -150,6 +157,80 @@ def alpha_bytes(png, box):
     return raw
 
 
+def extract_definition(sheet, frame_id):
+    """A standalone frame for a drawing that only exists as a definition inside a sheet.
+
+    The laugh extension's peak eye is defined in laugh-sheet.svg and nowhere else. Its paths
+    carry no colour of their own and inherit it from the group enclosing the definitions, so
+    that group's attributes are copied onto the wrapper -- the extension's README asks for
+    exactly this, and without it the drawing would bake as nothing.
+    """
+    root = ET.parse(sheet).getroot()
+    parent = {child: node for node in root.iter() for child in node}
+    target = next((e for e in root.iter() if e.get("id") == frame_id), None)
+    if target is None:
+        sys.exit(f"{frame_id}: not a frame file, and not defined in {sheet.name}")
+    enclosing = parent[parent[target]]      # definition -> <defs> -> presentation group
+    svg = ET.Element(f"{{{SVG_NS}}}svg", {"version": "1.2", "baseProfile": "tiny",
+                                          "width": str(LOCAL_W), "height": str(LOCAL_H),
+                                          "viewBox": f"{-ORIGIN_X} {-ORIGIN_Y} {LOCAL_W} {LOCAL_H}"})
+    group = ET.SubElement(svg, f"{{{SVG_NS}}}g", dict(enclosing.attrib))
+    group.append(target)
+    return ET.tostring(svg, encoding="unicode")
+
+
+def frame_svg(component, frame_id):
+    for path in (PACK / "frames" / component / f"{frame_id}.svg",
+                 LAUGH / "frames" / f"{frame_id}.svg"):
+        if path.exists():
+            return path.read_text()
+    return extract_definition(LAUGH / "laugh-sheet.svg", frame_id)
+
+
+def laugh_families(spec):
+    """The laugh extension, expressed as families in the pack's own shape.
+
+    Three of them. `laugh` is the six mouth drawings, a pose palette the skin walks while
+    talking. `laugh-burst` is the artist's 2.7 s performance step by step, drawings reused.
+    And `laugh` eyes are the three eye poses the performance uses -- two borrowed from
+    smile-squeeze, one new -- so a companion can name any of them within one clip.
+
+    Every mouth frame gets the eyes, cheeks and face lift the artist paired with it. For the
+    drawing palette that is the pairing at the drawing's first appearance; the pairings turn
+    out to be consistent across the performance, except for the lift, which the burst keeps
+    step by step.
+    """
+    timing = json.loads((LAUGH / "laugh-timing.json").read_text())
+    for key, pack_key in (("eyes_anchor", "eyes"), ("cheeks_anchor", "cheeks")):
+        if list(timing[key]) != list(spec["anchors"][pack_key]):
+            sys.exit(f"laugh {key} {timing[key]} no longer matches the pack's; "
+                     "the companions would land in the wrong place")
+    if timing["scale"] != spec["scale"]:
+        sys.exit("laugh extension is drawn at a different scale from the pack")
+
+    steps = timing["sequence"]
+    first = {}
+    for step in steps:
+        first.setdefault(step["mouth"], step)
+    drawings = sorted(first)                        # mouth-laugh-00 .. -05, in drawn order
+    eyes = list(dict.fromkeys(step["eyes"] for step in steps))
+
+    return [
+        ("mouth", {"name": "laugh", "ids": drawings,
+                   "ms": [first[d]["hold_ms"] for d in drawings],
+                   "anchor": timing["mouth_anchor"],
+                   "companions": [first[d] for d in drawings]}),
+        ("mouth", {"name": "laugh-burst", "ids": [s["mouth"] for s in steps],
+                   "ms": [s["hold_ms"] for s in steps],
+                   "anchor": timing["mouth_anchor"],
+                   "companions": steps}),
+        ("eyes", {"name": "laugh", "ids": eyes,
+                  "ms": [next(s["hold_ms"] for s in steps if s["eyes"] == e) for e in eyes],
+                  # "Hide pupils during these squeezed-eye drawings."
+                  "pupil_visibility": ["none"] * len(eyes)}),
+    ]
+
+
 def c_array(data, indent="    "):
     lines = []
     for i in range(0, len(data), 16):
@@ -167,11 +248,15 @@ def main():
     anchors = spec["anchors"]
 
     # Anchors are given in panel pixels; everything the skin places is measured from the
-    # panel centre, so convert once here rather than in the C++.
-    def anchor_offset(component, side):
-        key = {"eyes": "eyes", "brows": "brows", "cheeks": "cheeks",
-               "mouth": "mouth", "accents": "accent-right"}[component]
-        ax, ay = anchors[key]
+    # panel centre, so convert once here rather than in the C++. A family may bring its own:
+    # the laugh mouths are drawn against a mouth anchor 7 px higher than the pack's.
+    def anchor_offset(component, side, family=None):
+        if family and "anchor" in family:
+            ax, ay = family["anchor"]
+        else:
+            key = {"eyes": "eyes", "brows": "brows", "cheeks": "cheeks",
+                   "mouth": "mouth", "accents": "accent-right"}[component]
+            ax, ay = anchors[key]
         return ax - panel_w / 2.0, ay - panel_h / 2.0
 
     side_offsets = {}               # (component, side) -> local translate
@@ -179,52 +264,56 @@ def main():
     clips = []                      # (component, family, side, [layers], ms)
     tmp = pathlib.Path(tempfile.mkdtemp())
 
-    for component, families in spec["sets"].items():
-        if component in SKIP_COMPONENTS:
-            continue
-        for family in families:
-            fname = family["name"]
-            ids = family["ids"]
-            ms = family["ms"]
+    families_to_bake = [(component, family)
+                        for component, families in spec["sets"].items()
+                        if component not in SKIP_COMPONENTS
+                        for family in families]
+    extension = laugh_families(spec)
+    families_to_bake += extension
 
-            # Which sides this family has, decided from its first frame.
-            first = (PACK / "frames" / component / f"{ids[0]}.svg").read_text()
-            sides = sorted(set(re.findall(r'id="([^"]*-(?:left|right))"', first)))
-            side_keys = [s.rsplit("-", 1)[1] for s in sides] or [""]
+    for component, family in families_to_bake:
+        fname = family["name"]
+        ids = family["ids"]
+        ms = family["ms"]
 
-            for side_key in side_keys:
-                if side_key and (component, side_key) not in side_offsets:
-                    m = re.search(r'transform="translate\(\s*(-?[\d.]+)[\s,]+(-?[\d.]+)\s*\)[^"]*"\s+id="[^"]*-'
-                                  + side_key + '"', first)
-                    if m:
-                        side_offsets[(component, side_key)] = (float(m.group(1)), float(m.group(2)))
+        # Which sides this family has, decided from its first frame.
+        first = frame_svg(component, ids[0])
+        sides = sorted(set(re.findall(r'id="([^"]*-(?:left|right))"', first)))
+        side_keys = [s.rsplit("-", 1)[1] for s in sides] or [""]
 
-                per_colour = collections.OrderedDict()
+        for side_key in side_keys:
+            if side_key and (component, side_key) not in side_offsets:
+                m = re.search(r'transform="translate\(\s*(-?[\d.]+)[\s,]+(-?[\d.]+)\s*\)[^"]*"\s+id="[^"]*-'
+                              + side_key + '"', first)
+                if m:
+                    side_offsets[(component, side_key)] = (float(m.group(1)), float(m.group(2)))
 
-                for index, frame_id in enumerate(ids):
-                    svg = (PACK / "frames" / component / f"{frame_id}.svg").read_text()
-                    root = ET.fromstring(svg)
-                    side_id = f"{frame_id}-{side_key}" if side_key else None
+            per_colour = collections.OrderedDict()
 
-                    for colour in colour_layers(root):
-                        variant = isolate(svg, side_id, colour)
-                        tag = c_ident(f"{frame_id}_{side_key}_{COLORS[colour][0]}")
-                        png = render(variant, tmp, tag, scale)
-                        box = trim_box(png)
-                        entry = per_colour.setdefault(colour, [None] * len(ids))
-                        if box is None:
-                            continue        # nothing of this colour on this frame
-                        w, h, x, y = box
-                        data = alpha_bytes(png, box)
-                        digest = hashlib.sha1(data).hexdigest()
-                        if digest not in sprites:
-                            sprites[digest] = (f"px_{len(sprites):03d}", w, h, data)
-                        ox, oy = anchor_offset(component, side_key)
-                        cx = round(x + w / 2.0 - ORIGIN_X * scale + ox)
-                        cy = round(y + h / 2.0 - ORIGIN_Y * scale + oy)
-                        entry[index] = (digest, cx, cy)
+            for index, frame_id in enumerate(ids):
+                svg = frame_svg(component, frame_id)
+                root = ET.fromstring(svg)
+                side_id = f"{frame_id}-{side_key}" if side_key else None
 
-                clips.append((component, fname, side_key, per_colour, ms))
+                for colour in colour_layers(root):
+                    variant = isolate(svg, side_id, colour)
+                    tag = c_ident(f"{frame_id}_{side_key}_{COLORS[colour][0]}")
+                    png = render(variant, tmp, tag, scale)
+                    box = trim_box(png)
+                    entry = per_colour.setdefault(colour, [None] * len(ids))
+                    if box is None:
+                        continue        # nothing of this colour on this frame
+                    w, h, x, y = box
+                    data = alpha_bytes(png, box)
+                    digest = hashlib.sha1(data).hexdigest()
+                    if digest not in sprites:
+                        sprites[digest] = (f"px_{len(sprites):03d}", w, h, data)
+                    ox, oy = anchor_offset(component, side_key, family)
+                    cx = round(x + w / 2.0 - ORIGIN_X * scale + ox)
+                    cy = round(y + h / 2.0 - ORIGIN_Y * scale + oy)
+                    entry[index] = (digest, cx, cy)
+
+            clips.append((component, fname, side_key, per_colour, ms))
 
     # The pupil: one sprite, moved continuously by the skin.
     gaze_svg = (PACK / "frames/gaze/gaze-look-left-00.svg").read_text()
@@ -248,12 +337,23 @@ def main():
 
     anchor_offsets = {c: anchor_offset(c, "") for c in
                       ("eyes", "brows", "cheeks", "mouth", "accents")}
-    emit(sprites, clips, pupil, spec, scale, side_offsets, anchor_offsets)
+    emit(sprites, clips, pupil, spec, scale, side_offsets, anchor_offsets, extension)
 
 
-def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS):
-    PUPILS = {("eyes", f["name"]): f["pupil_visibility"]
-              for f in spec["sets"]["eyes"] if "pupil_visibility" in f}
+def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS, extension):
+    all_families = [(comp, f) for comp, fams in spec["sets"].items() for f in fams] + extension
+    PUPILS = {(comp, f["name"]): f["pupil_visibility"]
+              for comp, f in all_families if "pupil_visibility" in f}
+    COMPANIONS = {(comp, f["name"]): f["companions"]
+                  for comp, f in all_families if "companions" in f}
+
+    # Where a drawing lives, so a companion can name it as (clip, frame). Later families win,
+    # which is what the laugh needs: its two borrowed squeeze eyes resolve to the laugh eye
+    # clip, so every eye a laugh companion names is a frame of one clip.
+    WHERE = {}
+    for comp, f in all_families:
+        for index, frame_id in enumerate(f["ids"]):
+            WHERE[frame_id] = (c_ident(f"clip_{comp}_{f['name']}"), index)
     banner = ("/*\n"
               " * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD\n"
               " *\n"
@@ -279,6 +379,25 @@ def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS):
          "    uint32_t color;",
          "};",
          "",
+         "struct Clip;",
+         "",
+         "/// What the rest of the face does while one mouth frame is showing.",
+         "///",
+         "/// Most mouths leave the face alone. A laugh does not: the artist drew it as one",
+         "/// performance, and a \"ha\" always wears the > < squeeze and lifted cheeks, a \"catch\"",
+         "/// the softer arc. Pairing them per mouth frame keeps the face coherent however the",
+         "/// mouth got there -- played as a burst, or walked by a speech amplitude.",
+         "struct ClipCompanion {",
+         "    const Clip* eyesLeft;",
+         "    const Clip* eyesRight;",
+         "    uint8_t eyesFrame;",
+         "    const Clip* cheeksLeft;",
+         "    const Clip* cheeksRight;",
+         "    uint8_t cheeksFrame;",
+         "    /// Whole-face vertical lift in panel pixels, negative is up.",
+         "    int8_t faceY;",
+         "};",
+         "",
          "/// A drawn motion family: layers to stack, and how long each frame is held.",
          "struct Clip {",
          "    const ClipLayer* layers;",
@@ -288,6 +407,8 @@ def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS):
          "    /// narrowed dome has no white to put a pupil in, and the curious frames drop",
          "    /// one side on purpose.",
          "    const uint8_t* pupils;",
+         "    /// Per frame, what the rest of the face does. Null for a mouth that leads nothing.",
+         "    const ClipCompanion* companions;",
          "    uint8_t layerCount;",
          "    uint8_t frameCount;",
          "};",
@@ -373,12 +494,24 @@ def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS):
             h.append(f"static constexpr uint8_t {base}_opennessCount = {len(ladder)};")
             c[-1] = c[-1].replace("static const uint8_t", "const uint8_t")
 
+        companion_sym = "NULL"
+        steps = COMPANIONS.get((component, family))
+        if steps:
+            companion_sym = f"{base}_companions"
+            rows = []
+            for step in steps:
+                eyes, eye_frame = WHERE[step["eyes"]]
+                cheeks, cheek_frame = WHERE[step["cheeks"]]
+                rows.append(f"    {{&{eyes}_left, &{eyes}_right, {eye_frame}, "
+                            f"&{cheeks}_left, &{cheeks}_right, {cheek_frame}, {int(step['face_y'])}}},")
+            c += [f"static const ClipCompanion {companion_sym}[] = {{", *rows, "};"]
+
         c += [f"static const ClipLayer {base}_layers[] = {{"]
         for lsym, chex in layer_syms:
             c.append(f"    {{{lsym}_frames, {chex}}},")
         c += ["};",
               f"static const uint16_t {base}_ms[] = {{{', '.join(str(int(v)) for v in ms)}}};",
-              f"const Clip {base} = {{{base}_layers, {base}_ms, {pupil_sym}, "
+              f"const Clip {base} = {{{base}_layers, {base}_ms, {pupil_sym}, {companion_sym}, "
               f"{len(layer_syms)}, {len(ms)}}};",
               ""]
         h.append(f"extern const Clip {base};")

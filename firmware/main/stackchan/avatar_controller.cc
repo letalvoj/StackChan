@@ -177,7 +177,9 @@ void AvatarController::SetEmotion(const char* emotion) {
     } else if (strcmp(emotion, "happy") == 0) {
         avatar.setEmotion(stackchan::avatar::Emotion::Happy);
     } else if (strcmp(emotion, "laughing") == 0) {
-        avatar.setEmotion(stackchan::avatar::Emotion::Happy);
+        // Its own expression now, not a second spelling of "happy": open laughing mouths,
+        // the > < squeeze, and a burst that plays as soon as it is set.
+        avatar.setEmotion(stackchan::avatar::Emotion::Laugh);
     } else if (strcmp(emotion, "angry") == 0) {
         avatar.setEmotion(stackchan::avatar::Emotion::Angry);
     } else if (strcmp(emotion, "sad") == 0) {
