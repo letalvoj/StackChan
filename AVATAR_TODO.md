@@ -348,3 +348,45 @@ Measured against the reference again afterwards, mouth activity per panel: idle 
 curious 0.97, delighted 1.03, grumpy 1.02, sad 1.10, petted 1.02 -- every panel at or closer
 to the reference than before. Curious is the one that moved most: its mouth varied a third as
 much as the artist's, and now varies about four fifths as much.
+
+## 13 September — a real laugh
+
+"laughing" was a second spelling of "happy": `avatar_controller.cc` mapped both to
+`Emotion::Happy`, so a client that asked the face to laugh got a wide smile. There is now an
+`Emotion::Laugh`, baked from the artist's laugh extension (`artwork/laugh-2026-09-13`): six
+mouth drawings, a new `> <` peak eye, and a 2.7 s performance of two uneven bursts and a
+recovery.
+
+**The laugh is led by its mouth.** Everything else in the pack is a family per track, each
+on its own clock. The laugh is not: every mouth drawing is paired with its own eyes, cheeks
+and a 1–3 px face lift, and a "ha" always wears the `> <`. So the generator attaches a
+*companion* to each laugh mouth frame, from `laugh-timing.json`, and the skin makes the rest of
+the face follow whichever mouth frame is showing. That one mechanism covers both uses:
+silent, the face plays the burst; talking, the speech amplitude walks the six drawings (by
+measured openness, settle → grin → catch → hee → ha → haa) and each loud syllable brings its
+own squeeze with it. Setting the emotion starts the burst at once, and re-sending it with
+every sentence does not cut the burst short.
+
+**The laugh mouths sit 7 px higher than the pack's.** The extension draws against a mouth
+anchor of (160, 161) where the pack uses (160, 168). Baking them against the pack's anchor
+would have put every laugh a little low. The generator now takes an anchor per family, and
+refuses to bake if the extension's eye or cheek anchors ever stop matching the pack's.
+
+**A blink opened eyes that were drawn shut.** This predates the laugh. A blink swaps in the
+round blink lids, and on an emotion whose eyes are already closed arcs -- happy's squeeze,
+sleepy's droop -- that drew a half-open eye for a moment on every blink. The laugh's `> <`
+made it impossible to miss. An eye frame on which the artist shows neither pupil is now
+treated as drawn shut, and a blink leaves it alone.
+
+**Clip timing drifted.** `ClipTrack` counted each hold from the tick that noticed the previous
+one had ended, so every update's lateness was added to every hold after it. At a 33 ms
+update a nine-beat laugh ran up to ~300 ms long. Holds now run from when they were due.
+
+`laugh.sh` checks all of it against `laugh-stop-motion.gif`. Because the laugh starts the
+instant the emotion is set, every 33 ms capture has an exact counterpart. The worst
+difference over all 90 captures is 0.0026 mouth ink and 0.0010 eye ink, against 0.03–0.11
+and 0.013–0.019 between any two neighbouring poses of the artist's own. So every capture
+shows the right drawing, with the right eyes, at the right millisecond.
+
+The Astra panels did not regress. Measuring the eye region for the first time showed the
+delighted and petted eyes now hold still between blinks, as the artist's do.
