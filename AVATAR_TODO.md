@@ -390,3 +390,31 @@ shows the right drawing, with the right eyes, at the right millisecond.
 
 The Astra panels did not regress. Measuring the eye region for the first time showed the
 delighted and petted eyes now hold still between blinks, as the artist's do.
+
+## 14 September — the laugh rested on a happy face
+
+On the device the laugh played its burst and then settled on a closed grin with arched
+eyes -- which is, drawing for drawing, the happy face. The mistake was taking the artist's
+performance whole. Its grin and settle are the *recovery*: the extension's README says the
+event returns to the caller's expression, and those two drawings are the bridge back. A face
+whose emotion *is* laughing should not rest on the bridge.
+
+A laughing face now holds the laugh. The generator marks a laugh mouth open when it shows its
+tongue, and bakes the open drawings and the open run of the performance as families of their
+own. The face rests on the widest of them ("haa", with the `> <` eyes), arrives there first,
+waits the artist's own 600 ms lead-in, bursts through catch, ha, hee, haa, hee, ha on the
+artist's timing, and comes back to haa. Talking walks only the open drawings, so a closed
+syllable lands on "catch" instead of dropping to the grin.
+
+Worth recording what the user actually said, because it is the better spec: the wide open
+laugh is the face you expect when you press "laugh", and it should cycle from there. The
+artwork was correct; which frame counts as *resting* was a product decision, not an art one.
+
+`laugh.sh` now models the harness's tick grid rather than assuming capture *i* is *i* ticks
+into the burst. With a lead-in the burst starts on the first tick at or after 600 ms, not at
+600 ms, and the old approximation reported a false mismatch at that boundary.
+
+Separately, on the first flash: `/debug` reports the firmware version as the time CMake last
+*configured*, not when the image was built, so an incremental build keeps an old date. It
+cannot be used to tell which image is running; the laugh was confirmed by finding its sprite
+bytes in the flashed image instead.

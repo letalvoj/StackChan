@@ -132,6 +132,13 @@ extern const Clip clip_mouth_laugh;
 extern const uint8_t clip_mouth_laugh_burst_openness[];
 static constexpr uint8_t clip_mouth_laugh_burst_opennessCount = 9;
 extern const Clip clip_mouth_laugh_burst;
+extern const uint8_t clip_mouth_laugh_open_openness[];
+static constexpr uint8_t clip_mouth_laugh_open_opennessCount = 4;
+extern const Clip clip_mouth_laugh_open;
+extern const uint8_t clip_mouth_laugh_burst_open_openness[];
+static constexpr uint8_t clip_mouth_laugh_burst_open_opennessCount = 6;
+static constexpr uint16_t clip_mouth_laugh_burst_open_leadInMs = 600;
+extern const Clip clip_mouth_laugh_burst_open;
 extern const Clip clip_eyes_laugh_left;
 extern const Clip clip_eyes_laugh_right;
 
@@ -164,6 +171,6 @@ struct NamedClip {
     const Clip* clip;
 };
 extern const NamedClip kAllClips[];
-static constexpr int kAllClipCount = 43;
+static constexpr int kAllClipCount = 45;
 
 }  // namespace stackchan::avatar::chalk

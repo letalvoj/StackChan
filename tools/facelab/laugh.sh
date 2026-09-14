@@ -9,6 +9,11 @@
 # exact counterpart in laugh-stop-motion.gif -- and a drawing that is wrong, late, or paired
 # with the wrong eyes shows up as a mismatch at a known time.
 #
+# The counterpart is not always the GIF's frame at that time. A laughing face holds the laugh,
+# so ours rests on the widest open mouth where the artist rests on a closed grin, and bursts
+# through only the open steps. Outside the burst each capture is compared against that
+# resting drawing instead; inside it, against the GIF on the GIF's own clock.
+#
 # Needs a render first: ./sheets.sh chalk (or anything that runs render_faces).
 set -euo pipefail
 
@@ -36,14 +41,6 @@ starts, t = [], 0
 for step in steps:
     starts.append(t)
     t += step["hold_ms"]
-duration = t
-
-def artist_step(ms):
-    """Which of the artist's frames is on screen at this millisecond of the laugh."""
-    ms %= duration
-    return max(i for i, s in enumerate(starts) if s <= ms)
-
-ours = sorted(frames.glob("seq-laugh-*.bmp"))
 
 def ink(img, crop):
     """Fraction of lit pixels in a region -- the numeric check, not an eyeball one."""
@@ -54,12 +51,41 @@ def ink(img, crop):
 
 REGIONS = {"eyes": "220x60+50+70", "mouth": "120x80+100+130"}
 
+# The firmware does not replay the whole GIF. A laughing face holds the laugh, so it keeps
+# only the steps whose mouth is open (it shows its tongue) and drops the grin and settle the
+# artist uses to recover. Its timeline, from the moment the emotion is set:
+#   rest on the widest open mouth  ->  the open steps, on the artist's timing  ->  rest again
+# The rest lasts the artist's own lead-in, so during the burst our clock and the GIF's agree.
+open_steps = [i for i, s in enumerate(steps)
+              if "#e67c89" in (art / "frames" / f"{s['mouth']}.svg").read_text()]
+burst_from = starts[open_steps[0]]
+burst_to = starts[open_steps[-1]] + steps[open_steps[-1]]["hold_ms"]
+# The resting face is whichever open step draws the most mouth, measured on the GIF itself.
+rest = max(open_steps, key=lambda i: ink(tmp / f"ref_{i:02d}.png", REGIONS["mouth"]))
+
+# The harness sets the emotion and then advances in whole update ticks, capturing after each,
+# so capture i is (i + 1) ticks after the set. The burst begins on the first tick at or after
+# the lead-in -- not exactly at it -- and from then on runs on the artist's clock.
+burst_tick = max(TICK, -(-burst_from // TICK) * TICK)
+
+def expected_step(since_set):
+    """Which of the artist's frames our face should match this long after the set, and the
+    GIF time that corresponds to, or None while resting."""
+    at = burst_from + since_set - burst_tick
+    if since_set >= burst_tick and at < burst_to:
+        return max(i for i, s in enumerate(starts) if s <= at), at
+    return rest, None
+
+ours = sorted(frames.glob("seq-laugh-*.bmp"))
+
 pairs, rows = [], []
 for i, frame in enumerate(ours):
-    ms = i * TICK
-    k = artist_step(ms)
+    ms = (i + 1) * TICK                        # since the emotion was set
+    k, at = expected_step(ms)
     ref = tmp / f"ref_{k:02d}.png"
     name = steps[k]["mouth"].replace("mouth-laugh-", "")
+    if at is None:
+        name = f"rest ({name})"
     pair = tmp / f"pair_{i:03d}.png"
     subprocess.run(["magick",
                     "(", str(ref), "-bordercolor", "#c08040", "-border", "2", ")",
@@ -76,11 +102,16 @@ for i, frame in enumerate(ours):
 subprocess.run(["magick", "-delay", f"{TICK}x1000", *pairs, "-loop", "0", "-layers", "Optimize",
                 str(out / "side-by-side.gif")], check=True)
 
-# One still per artist step, at the middle of its hold, as a readable sheet.
-beats = []
-for k, s in enumerate(starts):
-    i = min(len(pairs) - 1, (s + steps[k]["hold_ms"] // 2) // TICK)
-    beats.append(pairs[i])
+# A readable sheet: the rest, then every burst step at the middle of its hold on our clock,
+# then the rest it comes back to.
+def capture_at(since_set):
+    return max(0, min(len(pairs) - 1, since_set // TICK - 1))
+
+beats = [pairs[capture_at(burst_tick // 2)]]
+for k in open_steps:
+    middle = burst_tick + (starts[k] - burst_from) + steps[k]["hold_ms"] // 2
+    beats.append(pairs[capture_at(middle)])
+beats.append(pairs[capture_at(burst_tick + (burst_to - burst_from) + 400)])
 subprocess.run(["montage", *beats, "-tile", "3x", "-geometry", "+6+6", "-background", "#181818",
                 str(out / "beats.png")], check=True)
 

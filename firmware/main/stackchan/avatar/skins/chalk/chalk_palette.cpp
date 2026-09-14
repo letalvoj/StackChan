@@ -160,21 +160,30 @@ static EmotionClips makeLaugh()
     // cheeks and face lift the artist paired with it (see ClipCompanion), so the values set
     // below are only what shows before the first mouth frame is placed -- and they are the
     // grin's own pairing, so there is no visible hand-over.
+    //
+    // Only the *open* drawings. The artist's grin and settle are the recovery -- the bridge
+    // back to whatever face came before -- and resting on them made the laugh look exactly
+    // like happy. A face that is laughing holds the laugh.
     EmotionClips e   = makeHappy();
     e.eyesLeft       = &clip_eyes_laugh_left;
     e.eyesRight      = &clip_eyes_laugh_right;
-    e.eyesRestFrame  = 0;                        // the soft squeeze the grin wears
-    e.mouthRest      = &clip_mouth_laugh;
-    e.mouthRestFrame = 0;                        // grin
-    // Talking while laughing walks the six laugh drawings by amplitude, so a loud syllable
-    // lands on "haa" and brings the > < eyes with it.
-    e.mouthSpeech    = &clip_mouth_laugh;
-    // Silent, the face performs the artist's burst: two uneven bursts and a recovery.
-    e.mouthIdle      = &clip_mouth_laugh_burst;
-    e.mouthIdleOnEnter = true;
-    e.cheeksRestFrame = 2;
-    e.openness       = clip_mouth_laugh_openness;
-    e.opennessCount  = clip_mouth_laugh_opennessCount;
+    e.eyesRestFrame  = 2;                        // > <, the pairing of the widest mouth
+    e.openness       = clip_mouth_laugh_open_openness;
+    e.opennessCount  = clip_mouth_laugh_open_opennessCount;
+    // Rest on the widest open mouth, which is the last rung of the measured ladder: "haa",
+    // with the > < eyes and lifted cheeks it brings.
+    e.mouthRest      = &clip_mouth_laugh_open;
+    e.mouthRestFrame = e.openness[e.opennessCount - 1];
+    // Talking walks the open drawings by amplitude: a closed beat lands on "catch" rather
+    // than on a grin, so the face never drops out of laughing between syllables.
+    e.mouthSpeech    = &clip_mouth_laugh_open;
+    // Silent, the face bursts from its rest -- catch, ha, hee, haa, hee, ha -- and comes back
+    // to haa. The first burst waits the artist's own lead-in, so a laugh that is set shows
+    // the laughing face first and then moves.
+    e.mouthIdle          = &clip_mouth_laugh_burst_open;
+    e.mouthIdleOnEnter   = true;
+    e.mouthIdleOnEnterMs = clip_mouth_laugh_burst_open_leadInMs;
+    e.cheeksRestFrame = 4;
     return e;
 }
 

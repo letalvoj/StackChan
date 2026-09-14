@@ -43,10 +43,13 @@ struct EmotionClips {
     /// things a quiet mouth does; the rest simply stay put.
     const Clip* mouthIdle = nullptr;
 
-    /// Play mouthIdle as soon as the face takes on this emotion, instead of waiting out the
-    /// usual quiet gap. Being told to laugh and then sitting there for four seconds first is
-    /// not laughing.
+    /// Play mouthIdle shortly after the face takes on this emotion, instead of waiting out
+    /// the usual quiet gap. Being told to laugh and then sitting there for four seconds first
+    /// is not laughing.
     bool mouthIdleOnEnter = false;
+    /// How long the resting face shows first, when mouthIdleOnEnter is set -- so the face
+    /// arrives on its expression and *then* moves, rather than lurching straight into motion.
+    uint16_t mouthIdleOnEnterMs = 0;
 
     const Clip* browsLeft  = nullptr;
     const Clip* browsRight = nullptr;

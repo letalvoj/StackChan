@@ -173,7 +173,8 @@ private:
     std::unique_ptr<ClipTrack> _track;
     int _face_y = 0;
     /// Set when an emotion wants its idle family played at once rather than after a gap.
-    bool _idle_on_enter = false;
+    bool _idle_on_enter      = false;
+    uint32_t _idle_enter_at = 0;
 
     /// A resting mouth is not a still mouth. The artist marks the quiet families
     /// "occasional, not continuous", so one is played through now and then and the mouth

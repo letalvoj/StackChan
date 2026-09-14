@@ -20337,6 +20337,68 @@ static const ClipLayer clip_mouth_laugh_burst_layers[] = {
 static const uint16_t clip_mouth_laugh_burst_ms[] = {600, 160, 140, 100, 180, 120, 140, 260, 1000};
 const Clip clip_mouth_laugh_burst = {clip_mouth_laugh_burst_layers, clip_mouth_laugh_burst_ms, NULL, clip_mouth_laugh_burst_companions, 2, 9};
 
+static const ClipFrame clip_mouth_laugh_open_chalk_frames[] = {
+    {&px_162, 1, 50},
+    {&px_164, 0, 54},
+    {&px_166, 0, 50},
+    {&px_168, 3, 56},
+};
+
+static const ClipFrame clip_mouth_laugh_open_pink_frames[] = {
+    {&px_163, 1, 66},
+    {&px_165, 2, 74},
+    {&px_167, 0, 65},
+    {&px_169, 3, 78},
+};
+
+const uint8_t clip_mouth_laugh_open_openness[] = {0, 2, 1, 3};
+static const ClipCompanion clip_mouth_laugh_open_companions[] = {
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 1, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 3, 1},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 2, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, -2},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 1, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, 1},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 2, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, -3},
+};
+static const ClipLayer clip_mouth_laugh_open_layers[] = {
+    {clip_mouth_laugh_open_chalk_frames, 0xF4F1E9},
+    {clip_mouth_laugh_open_pink_frames, 0xE67C89},
+};
+static const uint16_t clip_mouth_laugh_open_ms[] = {160, 140, 100, 180};
+const Clip clip_mouth_laugh_open = {clip_mouth_laugh_open_layers, clip_mouth_laugh_open_ms, NULL, clip_mouth_laugh_open_companions, 2, 4};
+
+static const ClipFrame clip_mouth_laugh_burst_open_chalk_frames[] = {
+    {&px_162, 1, 50},
+    {&px_164, 0, 54},
+    {&px_166, 0, 50},
+    {&px_168, 3, 56},
+    {&px_166, 0, 50},
+    {&px_164, 0, 54},
+};
+
+static const ClipFrame clip_mouth_laugh_burst_open_pink_frames[] = {
+    {&px_163, 1, 66},
+    {&px_165, 2, 74},
+    {&px_167, 0, 65},
+    {&px_169, 3, 78},
+    {&px_167, 0, 65},
+    {&px_165, 2, 74},
+};
+
+const uint8_t clip_mouth_laugh_burst_open_openness[] = {0, 2, 4, 1, 5, 3};
+static const ClipCompanion clip_mouth_laugh_burst_open_companions[] = {
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 1, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 3, 1},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 2, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, -2},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 1, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, 1},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 2, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, -3},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 1, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, 1},
+    {&clip_eyes_laugh_left, &clip_eyes_laugh_right, 2, &clip_cheeks_smile_lift_left, &clip_cheeks_smile_lift_right, 4, -1},
+};
+static const ClipLayer clip_mouth_laugh_burst_open_layers[] = {
+    {clip_mouth_laugh_burst_open_chalk_frames, 0xF4F1E9},
+    {clip_mouth_laugh_burst_open_pink_frames, 0xE67C89},
+};
+static const uint16_t clip_mouth_laugh_burst_open_ms[] = {160, 140, 100, 180, 120, 140};
+const Clip clip_mouth_laugh_burst_open = {clip_mouth_laugh_burst_open_layers, clip_mouth_laugh_burst_open_ms, NULL, clip_mouth_laugh_burst_open_companions, 2, 6};
+
 static const ClipFrame clip_eyes_laugh_left_chalk_frames[] = {
     {&px_051, -64, -24},
     {&px_052, -64, -24},
@@ -20407,6 +20469,8 @@ const NamedClip kAllClips[] = {
     {"accents_anger_twitch", &clip_accents_anger_twitch},
     {"mouth_laugh", &clip_mouth_laugh},
     {"mouth_laugh_burst", &clip_mouth_laugh_burst},
+    {"mouth_laugh_open", &clip_mouth_laugh_open},
+    {"mouth_laugh_burst_open", &clip_mouth_laugh_burst_open},
     {"eyes_laugh_left", &clip_eyes_laugh_left},
     {"eyes_laugh_right", &clip_eyes_laugh_right},
 };

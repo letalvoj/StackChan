@@ -88,7 +88,9 @@ void ChalkMouth::setEmotion(const Emotion& emotion)
     _emotion           = emotion;
     if (changed) {
         _flickering    = false;
-        _idle_on_enter = art::clipsFor(_emotion).mouthIdleOnEnter;
+        const art::EmotionClips& clips = art::clipsFor(_emotion);
+        _idle_on_enter = clips.mouthIdleOnEnter;
+        _idle_enter_at = GetHAL().millis() + clips.mouthIdleOnEnterMs;
     }
     refresh();
 }
@@ -175,6 +177,11 @@ void ChalkMouth::_update()
     }
 
     if (_idle_on_enter && clips.mouthIdle) {
+        // Holding the resting face for the lead-in. Return rather than fall through, or a
+        // quiet-gap fidget left scheduled by the previous emotion could fire first.
+        if (now < _idle_enter_at) {
+            return;
+        }
         // Played directly rather than by making the scheduled time "now": a clock that
         // reads zero -- the preview's, at its first frame -- is indistinguishable from "not
         // scheduled yet" below, and the laugh would wait out a whole quiet gap first.

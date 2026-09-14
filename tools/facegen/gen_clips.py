@@ -215,6 +215,19 @@ def laugh_families(spec):
     drawings = sorted(first)                        # mouth-laugh-00 .. -05, in drawn order
     eyes = list(dict.fromkeys(step["eyes"] for step in steps))
 
+    # A laugh mouth is open when it shows its tongue. The two without one -- grin and
+    # settle -- are the artist's recovery, the bridge back to whatever face came before, and
+    # on their own they read as plain happy. A face that is *laughing* stays on the open
+    # drawings, so those get families of their own.
+    def is_open(mouth_id):
+        return "#e67c89" in frame_svg("mouth", mouth_id)
+
+    open_drawings = [d for d in drawings if is_open(d)]
+    open_steps = [i for i, s in enumerate(steps) if is_open(s["mouth"])]
+    if open_steps != list(range(open_steps[0], open_steps[-1] + 1)):
+        sys.exit("the laugh's open steps are no longer one run; the burst cannot be cut from it")
+    core = [steps[i] for i in open_steps]
+
     return [
         ("mouth", {"name": "laugh", "ids": drawings,
                    "ms": [first[d]["hold_ms"] for d in drawings],
@@ -224,6 +237,19 @@ def laugh_families(spec):
                    "ms": [s["hold_ms"] for s in steps],
                    "anchor": timing["mouth_anchor"],
                    "companions": steps}),
+        ("mouth", {"name": "laugh-open", "ids": open_drawings,
+                   "ms": [first[d]["hold_ms"] for d in open_drawings],
+                   "anchor": timing["mouth_anchor"],
+                   "companions": [first[d] for d in open_drawings]}),
+        # The performance with its recovery cut off both ends. The lead-in is how long the
+        # artist holds before the first open mouth; a laugh that is set waits that long on
+        # its resting face before it bursts, so it starts *from* the laugh rather than
+        # jumping straight into motion.
+        ("mouth", {"name": "laugh-burst-open", "ids": [s["mouth"] for s in core],
+                   "ms": [s["hold_ms"] for s in core],
+                   "anchor": timing["mouth_anchor"],
+                   "companions": core,
+                   "lead_in_ms": sum(s["hold_ms"] for s in steps[:open_steps[0]])}),
         ("eyes", {"name": "laugh", "ids": eyes,
                   "ms": [next(s["hold_ms"] for s in steps if s["eyes"] == e) for e in eyes],
                   # "Hide pupils during these squeezed-eye drawings."
@@ -505,6 +531,11 @@ def emit(sprites, clips, pupil, spec, scale, SIDE_OFFSETS, ANCHOR_OFFSETS, exten
                 rows.append(f"    {{&{eyes}_left, &{eyes}_right, {eye_frame}, "
                             f"&{cheeks}_left, &{cheeks}_right, {cheek_frame}, {int(step['face_y'])}}},")
             c += [f"static const ClipCompanion {companion_sym}[] = {{", *rows, "};"]
+
+        lead_in = next((f["lead_in_ms"] for comp, f in all_families
+                        if comp == component and f["name"] == family and "lead_in_ms" in f), None)
+        if lead_in is not None:
+            h.append(f"static constexpr uint16_t {base}_leadInMs = {int(lead_in)};")
 
         c += [f"static const ClipLayer {base}_layers[] = {{"]
         for lsym, chex in layer_syms:

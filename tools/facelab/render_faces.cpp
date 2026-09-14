@@ -395,10 +395,10 @@ static std::vector<Performance> buildPerformances()
     v.push_back(talking("talk-doubt",   Emotion::Doubt,   "SpeakingModifier, doubt"));
 
     // --- the laugh, as laugh.sh compares it against the artist -----------------------
-    // Nothing armed: setting the emotion is what starts the burst, so this is the firmware
-    // playing the artist's performance on its own. Captured on every 33 ms update tick, the
-    // burst's first frame lands on capture 0, which is what lets laugh.sh put each capture
-    // beside the artist's frame at exactly the same millisecond.
+    // Nothing armed: setting the emotion is what starts the laugh, so this is the firmware
+    // performing on its own -- the resting "haa", the burst, and the rest again. Captured on
+    // every 33 ms update tick, so laugh.sh can place each capture against the artist's frame
+    // for exactly that millisecond.
     {
         Performance p;
         p.name         = "laugh";
