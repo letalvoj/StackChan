@@ -54,16 +54,21 @@ Upon connecting to `ws://<device_ip>:8081/ws`:
         |                                             |
         | ------------- TCP Handshake ------------->  |
         | <------------ WebSocket Upgrade ----------  |
-        |                                             | (starts 20ms timer)
-        | <------------ Device Hello Frame ---------- |
         |                                             |
-        | ------------ Host Hello Frame ------------> |
-        |                                             | (sets session_id,
-        |                                             |  unblocks audio channel)
+        | ------------ Host Hello Frame ------------> | (adopts the socket,
+        |                                             |  sets session_id,
+        |                                             |  starts 20ms timer)
+        | <------------ Device Hello Frame ---------- |
         |                                             |
 ```
 
-### Step 1: Device sends `hello` (within ~20ms of connection)
+> **The host speaks first.** The device adopts a client on its first *inbound frame*,
+> not on the upgrade — on this IDF the handshake is never dispatched to the handler — so
+> until the host sends something the device has no socket to greet. A client that waits
+> for the device's `hello` before sending anything waits forever on an open socket.
+> Send the host `hello` (Step 2) immediately; the device `hello` follows within ~20 ms.
+
+### Step 1: Device sends `hello` (within ~20ms of the host's first frame)
 The device transmits a text frame with its capabilities, IDs, and default microphone audio configuration:
 ```json
 {

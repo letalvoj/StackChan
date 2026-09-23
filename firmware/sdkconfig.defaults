@@ -115,6 +115,14 @@ CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
 # overflow costs a boot loop and a physical reset per attempt.
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8192
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# Pinned, not left to Kconfig: TX buffers are allocated on demand, not 16 x ~1.6 KB of
+# internal RAM grabbed at WiFi init. The dynamic choice is only offered while
+# SPIRAM_TRY_ALLOCATE_WIFI_LWIP is off, so toggling that switch ONCE flips this to static
+# -- and the static choice then sticks in the (untracked) sdkconfig after the switch is
+# turned back off. On 2026-09-23 that alone crash-looped the device on every boot, and
+# every rebuild after the revert carried it, which made the revert look like it failed.
+# Recovery was a fresh sdkconfig from these defaults.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUFFER=y

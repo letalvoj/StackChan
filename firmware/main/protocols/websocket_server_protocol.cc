@@ -86,7 +86,14 @@ bool WebsocketServerProtocol::Start() {
 
     esp_err_t err = httpd_start(&server_, &config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        // ESP_ERR_HTTPD_TASK is almost always internal RAM: the task stack needs one
+        // contiguous block, so "free" alone says nothing. Log the block that decides it.
+        // The device carries on to an idle face with nothing listening, so this line is
+        // the only trace -- see the internal RAM budget in sdkconfig.defaults.
+        ESP_LOGE(TAG, "httpd_start failed: %s (stack %d B; internal free %u, largest block %u)",
+                 esp_err_to_name(err), (int)config.stack_size,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         return false;
     }
 
