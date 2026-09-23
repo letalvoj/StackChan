@@ -23,6 +23,24 @@
 enum class HeadPetGesture { None, Press, Release, SwipeForward, SwipeBackward };
 
 /**
+ * @brief Raw head-touch contact, before it is reduced to a gesture.
+ *
+ * The Si12T has three pads in a line along the head's back<->front axis, each reporting
+ * 0-3. GestureRecognizer throws all of that away except "touched / swiped / released",
+ * which is the right input for the face but far too coarse for anything that wants to
+ * show *where* the hand is -- the LED glow does. So the poll publishes both: the gesture
+ * for behaviour, the field for rendering.
+ */
+struct HeadTouchField {
+    uint8_t pad[3]   = {0, 0, 0};  ///< Contact strength per pad, 0-3. pad[0] is the low
+                                   ///< bit pair of the Si12T result and the negative end
+                                   ///< of position.
+    int16_t position = 0;          ///< Intensity-weighted centroid, -100..100, 0 if untouched.
+    bool touched     = false;
+};
+
+
+/**
  * @brief
  *
  */
@@ -233,11 +251,18 @@ public:
 
     /* --------------------------------- HeadPet -------------------------------- */
     uitk::Signal<HeadPetGesture> onHeadPetGesture;
+    /// Emitted at the poll rate while a hand is on the head, plus one final untouched
+    /// sample on release. Fires on the head-touch task, not the UI thread.
+    uitk::Signal<HeadTouchField> onHeadTouchField;
 
     /* ----------------------------------- RGB ---------------------------------- */
     void setRgbColor(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
     void showRgbColor(uint8_t r, uint8_t g, uint8_t b);
     void refreshRgb();
+    /// Write a whole strip and latch it in one I2C transaction. `rgb565le` is two bytes
+    /// per LED, little-endian, as the expander's LED RAM wants them. Twelve separate
+    /// setRgbColor() calls are twelve transactions; an animated strip cannot afford that.
+    void writeRgbFrame(const uint8_t* rgb565le, size_t len);
 
     /* ---------------------------------- Power --------------------------------- */
     void setServoPowerEnabled(bool enabled);

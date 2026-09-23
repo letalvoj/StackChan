@@ -84,6 +84,15 @@ void Hal::refreshRgb()
     _io_expander->refreshLeds();
 }
 
+void Hal::writeRgbFrame(const uint8_t* rgb565le, size_t len)
+{
+    if (!_io_expander || !rgb565le || len == 0) {
+        return;
+    }
+    _io_expander->setLedData(rgb565le, len);
+    _io_expander->refreshLeds();
+}
+
 void Hal::showRgbColor(uint8_t r, uint8_t g, uint8_t b)
 {
     for (int i = 0; i < 12; i++) {

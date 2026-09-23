@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "neon_light.h"
+#include "led_stage.h"
 #include <hal/hal.h>
 
 using namespace stackchan::addon;
@@ -78,22 +79,26 @@ void NeonLight::setDuration(float durationSec)
     _color_anim.begin();
 }
 
+// Both strips write the stage's base layer rather than the hardware. That is the whole
+// point of the stage: a colour asked for here is a *wish that stays written down*, so the
+// listening/speaking wash and the head-pet glow can sit on top of it and lift off again
+// without having destroyed it. Nothing below refreshes -- LedStage::update() owns the
+// push, and pushes once for both strips.
+
 void LeftNeonLight::set_rgb_color_impl(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
 {
-    GetHAL().setRgbColor(index, r, g, b);
+    GetLedStage().setBase(index, r, g, b);
 }
 
 void LeftNeonLight::refresh_rgb_impl()
 {
-    GetHAL().refreshRgb();
 }
 
 void RightNeonLight::set_rgb_color_impl(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
 {
-    GetHAL().setRgbColor(index + 6, r, g, b);
+    GetLedStage().setBase(index + kLedsPerSide, r, g, b);
 }
 
 void RightNeonLight::refresh_rgb_impl()
 {
-    GetHAL().refreshRgb();
 }

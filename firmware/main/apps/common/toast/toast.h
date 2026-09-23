@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+#pragma once
 // Ref: https://www.heroui.com/docs/components/toast
 #include <cstdint>
 #include <string>

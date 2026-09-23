@@ -7,6 +7,8 @@
 #include <mooncake_log.h>
 #include <mcp_server.h>
 #include <application.h>            // TaskPriorityReset
+#include <board.h>
+#include <display.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
 #include "board/hal_bridge.h"
@@ -122,10 +124,64 @@ void Hal::xiaozhi_mcp_init()
                            return true;
                        });
 
+    // The speech bubble, for a host to write and clear directly.
+    //
+    // Nothing else on the wire does this. `tts sentence_start` is a subtitle -- it belongs
+    // to an utterance and is replaced by the next one -- and `stt` is the person's
+    // transcript, which this face does not draw. A UI that wants to put text up, or take
+    // down the sleepy face's Zzz, needs an explicit set and an explicit clear.
+    //
+    // User-only: they are listed only with `withUserTools`, so a model enumerating its tools
+    // never sees them and cannot write captions over its own subtitles. tools/call still
+    // reaches them by name.
+    //
+    // Through the Display rather than the avatar, so the controller that owns the Zzz sees
+    // the bubble change hands. It is last writer wins: the next subtitle replaces this text,
+    // and the device going idle clears it.
+    mclog::tagInfo(_tag, "add screen.show_speech_bubble tool");
+    mcp_server.AddUserOnlyTool("self.screen.show_speech_bubble",
+                               "Show text in the robot's speech bubble. It stays until it is "
+                               "hidden, replaced by the next spoken subtitle, or the device "
+                               "goes idle.",
+                               PropertyList({Property("text", kPropertyTypeString)}),
+                               [](const PropertyList& properties) -> ReturnValue {
+                                   const auto text = properties["text"].value<std::string>();
+                                   if (text.empty()) {
+                                       // An empty bubble is a hidden one, and a clear that
+                                       // looks like a set is how callers end up confused
+                                       // about which call hides it.
+                                       throw std::runtime_error(
+                                           "text is empty; use self.screen.hide_speech_bubble");
+                                   }
+                                   auto display = Board::GetInstance().GetDisplay();
+                                   if (display == nullptr) {
+                                       throw std::runtime_error("No display on this board");
+                                   }
+                                   display->SetChatMessage("system", text.c_str());
+                                   return true;
+                               });
+
+    mclog::tagInfo(_tag, "add screen.hide_speech_bubble tool");
+    mcp_server.AddUserOnlyTool("self.screen.hide_speech_bubble",
+                               "Hide the robot's speech bubble, whatever it shows -- including "
+                               "the sleepy face's Zzz.",
+                               PropertyList(),
+                               [](const PropertyList& properties) -> ReturnValue {
+                                   auto display = Board::GetInstance().GetDisplay();
+                                   if (display == nullptr) {
+                                       throw std::runtime_error("No display on this board");
+                                   }
+                                   display->ClearChatMessages();
+                                   return true;
+                               });
+
     mclog::tagInfo(_tag, "add robot.set_led_color tool");
     mcp_server.AddTool(
         "self.robot.set_led_color",
-        "Set the color of the robot's INTERNAL onboard LED. This is NOT for room lights. "
+        "Set the color of the robot's INTERNAL onboard LEDs (twelve, six per side of the "
+        "head). This is NOT for room lights. The colour persists: while the robot is "
+        "listening or speaking a translucent status wash sits on top of it, and it shows "
+        "through again untouched once the robot goes idle. "
         "Values: 0-168 (safe range). Red=168,0,0; Green=0,168,0; Blue=0,0,168; White=100,100,100; Off=0,0,0.",
         PropertyList({Property("red", kPropertyTypeInteger, 0, 0, 168),
                       Property("green", kPropertyTypeInteger, 0, 0, 168),

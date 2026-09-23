@@ -7,6 +7,7 @@
 #include "modifiable.h"
 #include "modifiers/modifiers.h"
 #include "json/json_helper.h"
+#include "addons/neon_light/led_stage.h"
 #include <memory>
 
 namespace stackchan {
@@ -154,8 +155,12 @@ public:
             _motion->update();
         }
 
+        // The two lights only animate the *base* colour into the stage; the stage is what
+        // composites status and touch over it and talks to the hardware, so it ticks
+        // every frame whether or not either light has anything to say.
         _left_neon_light->update();
         _right_neon_light->update();
+        addon::GetLedStage().update();
     }
 
     /**

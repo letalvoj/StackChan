@@ -125,6 +125,7 @@ static void _head_touch_update_task(void* param)
 
     GestureRecognizer recognizer;
     HeadPetGesture gesture;
+    bool was_touched = false;
 
     vTaskDelay(pdMS_TO_TICKS(200));
 
@@ -139,6 +140,22 @@ static void _head_touch_update_task(void* param)
         if (gesture != HeadPetGesture::None) {
             GetHAL().onHeadPetGesture.emit(gesture);
         }
+
+        // The raw field, for anything that wants to show *where* the hand is rather than
+        // react to the fact of it. Published only while in contact, plus the one empty
+        // sample that says the hand is gone -- an idle head has nothing to say and this
+        // runs twenty times a second.
+        const bool touched = data.is_touched();
+        if (touched || was_touched) {
+            HeadTouchField field;
+            field.pad[0]   = data.intensity[0];
+            field.pad[1]   = data.intensity[1];
+            field.pad[2]   = data.intensity[2];
+            field.position = touched ? data.get_position() : 0;
+            field.touched  = touched;
+            GetHAL().onHeadTouchField.emit(field);
+        }
+        was_touched = touched;
 
         vTaskDelay(pdMS_TO_TICKS(50));
     }

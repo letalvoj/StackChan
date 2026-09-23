@@ -335,6 +335,17 @@ void Hal::showRgbColor(uint8_t r, uint8_t g, uint8_t b) {
     EM_ASM({ if (typeof Module.onUpdateLed === 'function') Module.onUpdateLed($0, $1, $2); }, r, g, b);
 }
 void Hal::refreshRgb() {}
+void Hal::writeRgbFrame(const uint8_t* rgb565le, size_t len) {
+    // The browser mock shows one lamp, so hand it the first LED unpacked back to 888.
+    if (!rgb565le || len < 2) {
+        return;
+    }
+    const uint16_t c = static_cast<uint16_t>(rgb565le[0] | (rgb565le[1] << 8));
+    const uint8_t r  = static_cast<uint8_t>((c >> 8) & 0xF8);
+    const uint8_t g  = static_cast<uint8_t>((c >> 3) & 0xFC);
+    const uint8_t b  = static_cast<uint8_t>((c << 3) & 0xF8);
+    EM_ASM({ if (typeof Module.onUpdateLed === 'function') Module.onUpdateLed($0, $1, $2); }, r, g, b);
+}
 void Hal::setServoPowerEnabled(bool enabled) {}
 
 class WasmAvatarWorker : public mooncake::BasicAbility {

@@ -7,6 +7,7 @@
 #include <memory>
 #include <mooncake_log.h>
 #include <nvs_flash.h>
+#include <stackchan/addons/neon_light/led_stage.h>
 
 static std::unique_ptr<Hal> _hal_instance;
 static const std::string_view _tag = "HAL";
@@ -34,6 +35,11 @@ void Hal::init()
 
     xiaozhi_board_init();
     xiaozhi_mcp_init();
+    // Before head_touch_init(), deliberately: the stage subscribes to onHeadTouchField,
+    // and head_touch_init() spawns the task that emits it. Subscribing to a signal that
+    // is already being emitted from another core is a data race on the subscriber list,
+    // and the window is exactly as wide as the rest of boot.
+    stackchan::addon::GetLedStage().init();
     head_touch_init();
     io_expander_init();
     rtc_init();
