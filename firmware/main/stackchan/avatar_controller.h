@@ -21,6 +21,8 @@ private:
     int idle_motion_modifier_id_        = -1;
     int idle_expression_modifier_id_    = -1;
     int blink_modifier_id_              = -1;
-    bool is_sleeping_                   = false;
+    /// The bubble currently shows the sleepy face's Zzz, which this controller wrote and
+    /// so must take back -- as opposed to text some host put there, which it must not.
+    bool showing_zzz_                   = false;
     uint8_t idle_motion_level_          = 2;
 };

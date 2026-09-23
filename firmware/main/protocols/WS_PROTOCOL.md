@@ -236,8 +236,8 @@ All JSON frames carry `"session_id"` and `"type"`.
 |---|---|---|
 | `hello` | `transport: "websocket"`<br>`session_id: "<string>"`<br>`audio_params: { sample_rate, frame_duration }` | Required handshake reply to device `hello`. Establishes active session ID. |
 | `tts` | `state: "start"\|"stop"\|"sentence_start"`<br>`text: "<subtitle>"` *(on sentence_start)* | Drives speech state: `start` sets device to `speaking` (enabling audio decode); `stop` returns to `listening`/`idle`; `sentence_start` displays subtitle text in avatar speech bubble. |
-| `stt` | `text: "<user transcript>"` | Displays transcribed user speech in the chat message interface. |
-| `llm` | `emotion: "<emotion_name>"` | Sets avatar facial expression. Supported: `neutral`, `happy`, `laughing`, `angry`, `sad`, `crying`, `sleepy`, `doubtful`. `laughing` is a distinct expression, not an alias for `happy`: it plays a short laugh as soon as it is set, and laughs while talking. `crying` is still an alias for `sad`. |
+| `stt` | `text: "<user transcript>"` | Accepted and **not displayed**. Upstream draws it in a chat log; this face has only the robot's own speech bubble, and putting the person's words there would show the robot saying them. To put text on screen use the MCP tools `self.screen.show_speech_bubble` / `self.screen.hide_speech_bubble`. |
+| `llm` | `emotion: "<emotion_name>"` | Sets avatar facial expression. Supported: `neutral`, `happy`, `laughing`, `angry`, `sad`, `crying`, `sleepy`, `doubtful`. `laughing` is a distinct expression, not an alias for `happy`: it plays a short laugh as soon as it is set, and laughs while talking. `crying` is still an alias for `sad`. `sleepy` also puts `Zzz…` in the speech bubble; setting any other emotion, any status change, or `self.screen.hide_speech_bubble` takes it down. |
 | `mcp` | `payload: { ... }` | Encapsulates JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`) to the MCP server. |
 | `system` | `command: "reboot"` | Executes system management commands (`reboot` triggers `esp_restart()`). |
 | `alert` | `status: "<title>"`, `message: "<body>"`, `emotion: "<name>"` | Displays modal alert overlay with specified emotion. |
@@ -357,6 +357,10 @@ Included in `tools/list` only when `withUserTools: true`:
 - `self.screen.get_info`: Returns screen resolution and color format.
 - `self.screen.snapshot`: Takes screenshot of UI and uploads to URL.
 - `self.screen.preview_image`: Displays remote image on screen.
+- `self.screen.show_speech_bubble` (`text`, string, non-empty): Shows text in the avatar's speech bubble. Last writer wins -- the next `tts sentence_start` subtitle replaces it, and the device going idle clears it. An empty `text` is an error, not a hide. (`hal/hal_mcp.cpp`)
+- `self.screen.hide_speech_bubble`: Hides the speech bubble, whatever it shows, including the sleepy `Zzz…`. (`hal/hal_mcp.cpp`)
+
+Being user-only hides these from a model's `tools/list`; `tools/call` reaches them by name regardless.
 - `self.assets.set_download_url`: Sets custom asset download URL.
 
 ---
