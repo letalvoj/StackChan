@@ -183,7 +183,18 @@ void CoreS3AudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gp
 }
 
 void CoreS3AudioCodec::SetOutputVolume(int volume) {
-    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
+    // esp_codec_dev refuses a volume write while the output is closed, returning
+    // ESP_CODEC_DEV_WRONG_STATE, and the audio power timer closes the output after
+    // AUDIO_POWER_TIMEOUT_MS (15 s) of silence. Under ESP_ERROR_CHECK that made an
+    // ordinary `self.audio_speaker.set_volume` call abort() and reboot the device
+    // whenever it arrived after a quiet spell -- which is most of the time, since the
+    // agent sets the volume when nobody is talking.
+    //
+    // A closed speaker is not an error, just an absent one: EnableOutput(true) re-applies
+    // output_volume_ when it comes back, so recording the value below is the whole job.
+    if (output_enabled_) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_set_out_vol(output_dev_, volume));
+    }
     AudioCodec::SetOutputVolume(volume);
 }
 
