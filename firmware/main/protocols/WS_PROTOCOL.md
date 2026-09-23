@@ -121,11 +121,14 @@ Audio is transmitted via **Binary WebSocket Frames**.
 - Frames carry **raw Opus packets** with **no envelope, no container headers (no Ogg/WAV), and no binary prefixes**.
 - Maximum frame size accepted by server: **64 KB** (`kMaxFrameBytes`); larger frames close the connection.
 
-### The audio channel
+### Speaker vs. microphone
 
-Audio in **both** directions flows only while the device's *audio channel* is open (`/debug` reports it as `audio_channel_open`). This is separate from the WebSocket connection:
+The two directions are gated differently:
 
-| Event | Audio channel |
+- **Speaker (host → device)** works as soon as the host has sent its `hello` — no tap needed. This is what makes the robot usable for announcements: connect, `hello`, `tts start`, stream, `tts stop`.
+- **Microphone (device → host)** flows only while the *audio channel* is open (`/debug` reports it as `audio_channel_open`). The channel is the user's conversation session, and only the user opens it:
+
+| Event | Audio channel (microphone session) |
 |---|---|
 | New client adopted | **closed** |
 | Face tap, camera tap or wake word while idle | **opened** — once the host `hello` has arrived. If it has not, the device waits 10 s, shows `SERVER_TIMEOUT` and returns to idle |
@@ -133,7 +136,7 @@ Audio in **both** directions flows only while the device's *audio channel* is op
 | Face tap while `listening` | **closed** — device sends `goodbye` and goes `idle` |
 | Protocol error | **closed** |
 
-So on a fresh connection, audio does nothing until the user has tapped the robot once. After that the channel stays open across turns until a tap ends the session.
+Before 2026-09-23 the speaker was gated on the audio channel too, so audio sent before anyone had tapped the robot — and after every reconnect — was silently discarded.
 
 ### Uplink: Device Microphone -> Host
 1. **Trigger**: User taps the robot's face, taps the camera icon, a wake word is detected, or a `tts stop` returns the device to a turn it interrupted (see Downlink step 4).
@@ -155,7 +158,7 @@ So on a fresh connection, audio does nothing until the user has tapped the robot
    ```json
    {"session_id":"my-session-uuid-1234","type":"tts","state":"start"}
    ```
-   > **Which frames play**: binary Opus frames are accepted while the device is `speaking`, `listening` or `idle`, **and only while the audio channel is open**. Anything else is discarded on arrival. Audio that arrives just before its `tts start` (for example after a pause) is kept and plays when speaking begins, rather than being flushed.
+   > **Which frames play**: binary Opus frames are accepted while the device is `speaking`, `listening` or `idle`, from a host that has sent its `hello`. They are discarded on arrival — never stored for later — before the host `hello` or while the device is busy elsewhere (connecting, activating, Wi-Fi setup, upgrading). Audio that arrives just before its `tts start` (for example after a pause) is kept and plays when speaking begins, rather than being flushed.
 2. **Text Bubble Display (Optional)**: The host can update the subtitle in the speech bubble:
    ```json
    {"session_id":"my-session-uuid-1234","type":"tts","state":"sentence_start","text":"Hello, I am StackChan!"}
@@ -460,7 +463,7 @@ If you are implementing a custom backend, agent, or gateway in Python, Node.js, 
    - Wait for `{"type":"listen", "state":"start", ...}` (the user tapped the face or camera icon, or said the wake word).
    - Read incoming Binary WebSocket frames (each frame is one raw Opus packet @ 16 kHz mono). Feed into Opus decoder / STT engine.
    - Monitor `{"type":"vad", "state":"speech"|"silence"}` and decide yourself when the user has finished — the device does not send `listen stop`.
-   - `{"type":"goodbye"}` means the user tapped to end the session; the audio channel is closed until the next tap.
+   - `{"type":"goodbye"}` means the user tapped to end the session; the microphone is closed until the next tap. The speaker keeps working.
 4. **Interleaved Camera Capture (Optional)**:
    - If `listen` contained `"video": true` and VAD is `"speech"`, invoke MCP `tools/call` with `self.camera.capture` (`{"stream": true}`) every 1-2 seconds to obtain latest visual context. Parse the nested image string (§5).
 5. **Send Robot Speech & Output**:
@@ -473,10 +476,9 @@ If you are implementing a custom backend, agent, or gateway in Python, Node.js, 
      with a fresh `listen start`. An utterance sent while the device was `idle` — using the
      robot as a speaker — returns to `idle`, and the microphone is never armed. Sending
      audio cannot put the device into `listening`; only a tap or a wake word does that.
-   - **Speaker mode needs an open audio channel.** On a fresh connection nothing plays
-     until the user has tapped the robot once; after that the channel stays open across
-     turns until a tap while listening (`goodbye`) closes it. Check `audio_channel_open`
-     in `/debug` if audio is silently ignored.
+   - **Announcements need no tap.** Right after the handshake the host may `tts start`,
+     stream and `tts stop` to use the robot as a speaker. The microphone stays off unless
+     the user starts a turn.
 6. **Handle Interruptions**:
    - If `{"type":"abort"}` is received from device, immediately cease sending audio frames, cancel active LLM/TTS generation, and send `tts stop` — after a face tap the device keeps playing what it has queued until you do.
 7. **Control Head & Hardware**:

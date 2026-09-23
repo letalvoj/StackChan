@@ -832,6 +832,13 @@ void WebsocketServerProtocol::CloseAudioChannel(bool send_goodbye) {
     // it lets the next turn start without another handshake.
 }
 
+bool WebsocketServerProtocol::CanReceiveSpeakerAudio() const {
+    // The hello bit is cleared when a new client is adopted and set by that client's hello,
+    // so this is "the current host has introduced itself" -- never a previous one.
+    return client_fd_.load() >= 0 && !error_occurred_ &&
+           (xEventGroupGetBits(event_group_) & WS_SERVER_SERVER_HELLO_EVENT) != 0;
+}
+
 bool WebsocketServerProtocol::IsAudioChannelOpened() const {
     // IsTimeout() is overridden to false for this transport -- see the header. Kept in
     // the expression so this line still matches every other protocol implementation.

@@ -41,6 +41,11 @@ public:
     bool OpenAudioChannel() override;
     void CloseAudioChannel(bool send_goodbye = true) override;
     bool IsAudioChannelOpened() const override;
+    /// A connected host that has sent its hello may use the speaker, audio channel or not.
+    /// The channel is the MICROPHONE session -- opened by a tap or wake word, closed by a
+    /// tap -- and gating playback on it made the robot mute for announcements until
+    /// someone touched its face, and mute again after every reconnect.
+    bool CanReceiveSpeakerAudio() const override;
     bool SendText(const std::string& text) override;
 
     // True once a host has completed the WebSocket handshake.
