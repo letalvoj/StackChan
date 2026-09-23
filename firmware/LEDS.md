@@ -88,8 +88,8 @@ the source can derive. Measured on the device: the two sides disagree. Each stri
 therefore carries its own flag:
 
 ```cpp
-inline constexpr bool kLeftStripRunsBackToFront  = true;    // led_stage.h
-inline constexpr bool kRightStripRunsBackToFront = false;   // wired in reverse
+inline constexpr bool kLeftStripRunsBackToFront  = false;   // led_stage.h
+inline constexpr bool kRightStripRunsBackToFront = true;    // opposite to the left
 ```
 
 If stroking the head makes the glow chase the wrong way **on one side only**, flip that
@@ -100,21 +100,43 @@ nothing else in the firmware encodes winding direction, so that is the whole fix
 
 ## 4. The touch glow
 
-Every pad throws a gaussian pool of light onto the axis (σ = 0.55). At full contact on
+Every pad throws a gaussian pool of light onto the axis (σ = 0.42). At full contact on
 one side's pad the six LEDs of a strip come up at
 
 ```
-pad 0   1.00  0.77  0.35  0.09  0.01  0.00
-pad 1   0.19  0.55  0.94  0.94  0.55  0.19
-pad 2   0.00  0.01  0.09  0.35  0.77  1.00
+pad 0   1.00  0.64  0.16  0.02  0.00  0.00
+pad 1   0.06  0.36  0.89  0.89  0.36  0.06
+pad 2   0.00  0.00  0.02  0.16  0.64  1.00
 ```
 
-— a pool of three or four, with the far end genuinely dark. Wide enough that a fingertip
+— a pool of about three, with the far end genuinely dark. Wide enough that a fingertip
 reads as one soft glow rather than three separate lamps; narrow enough that it is
 obviously *local*, which is the whole point.
 
 An LED takes the **strongest** pool reaching it rather than the sum, so two pads held at
 once do not blow out the LED between them.
+
+### Why the glow needs a contrast curve
+
+The obvious knob when the glow feels too broad is σ, and it is usually the wrong one.
+The table above shows why: at the *old* σ = 0.55 a pad still only reached the far end of
+the head at 0.001. The gaussian was never spilling light down the strip.
+
+What spills is the **input**. The Si12T reports each pad as a 2-bit intensity, and a hand
+resting on the back of the head couples capacitively into all three pads — the far one
+reads 1 or 2 rather than 0. Linearly that is 33–67% brightness at the opposite end of the
+head, which looks exactly like a leaky gaussian and is not one.
+
+So the raw reading is raised to a power before it becomes brightness:
+
+```cpp
+constexpr float kTouchGamma = 1.7f;   // led_stage.cpp
+// 1/3 -> 0.17    2/3 -> 0.52    3/3 -> 1.00
+```
+
+Incidental coupling drops away sharply; a real press is untouched. **If the glow is too
+broad, raise the gamma before touching σ** — 2.2 puts a coupled `1/3` pad at 9%. If a
+light touch feels dead instead, lower it toward 1.0, which is plain linear.
 
 Then the asymmetry that makes it feel like light rather than a readout:
 
@@ -202,9 +224,11 @@ hal/hal_io_expander.cpp              ← writeRgbFrame(), the single-transaction
 stackchan/avatar_controller.cc       ← SetStatus(): the only status-layer writer worth changing
 ```
 
-Every tuning number — colours, breath periods, alphas, the glow's width and its attack
-and decay — is a named `constexpr` in the first sixty lines of `led_stage.cpp`. Retheming
-the lights is editing that block; nothing else needs to know.
+Every tuning number — colours, breath periods, alphas, the glow's width, its contrast
+curve, and its attack and decay — is a named `constexpr` in the first seventy lines of
+`led_stage.cpp`. Retheming the lights is editing that block; nothing else needs to know.
+The two exceptions are the strip winding flags, which are geometry rather than taste and
+live in `led_stage.h` (§3).
 
 **Ideas this shape supports cheaply**, if you want more:
 

@@ -13,8 +13,8 @@ inline constexpr int kLedCount    = 12;
 inline constexpr int kLedsPerSide = 6;
 
 /// The two strips are NOT wired the same way round, which is the sort of thing only the
-/// hardware can tell you: measured on the device, a back-to-front rub lit the left side
-/// correctly and the right side in reverse. So LED 0 and LED 6 are opposite ends of the
+/// hardware can tell you: measured on the device, the right strip runs opposite to the
+/// left, and the left one runs front-to-back. So LED 0 and LED 6 are opposite ends of the
 /// head, and each strip carries its own winding flag.
 ///
 /// "Left" and "right" are the robot's own, matching LeftNeonLight / RightNeonLight -- the
@@ -22,8 +22,8 @@ inline constexpr int kLedsPerSide = 6;
 ///
 /// These two booleans are the only place the winding is encoded; led_axis() is the only
 /// reader, so flipping one here flips every effect that has a direction.
-inline constexpr bool kLeftStripRunsBackToFront  = true;
-inline constexpr bool kRightStripRunsBackToFront = false;
+inline constexpr bool kLeftStripRunsBackToFront  = false;
+inline constexpr bool kRightStripRunsBackToFront = true;
 
 /// Where an LED sits along the head's back<->front axis: -1 at the back, +1 at the front.
 constexpr float led_axis(int index)

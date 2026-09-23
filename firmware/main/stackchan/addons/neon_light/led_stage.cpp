@@ -41,8 +41,10 @@ constexpr StatusStyle kStatusSpeaking = {0, 70, 190, 0.85f, 1.0f};
 /// cut, which on a 12-LED strip beside someone's face is a flash.
 constexpr float kStatusFadeSec = 0.35f;
 
-/// Warm pink: the same "you are being petted" the face says with hearts.
-constexpr StatusStyle kTouchStyle = {220, 80, 140, 1.0f, 0.0f};
+/// Warm pink: the same "you are being petted" the face says with hearts. Peak alpha is
+/// short of 1.0 so even a firm press lets a little of the base colour through -- at a
+/// full 1.0 the glow read as a flat repaint of the strip rather than a light on top of it.
+constexpr StatusStyle kTouchStyle = {220, 80, 140, 0.85f, 0.0f};
 
 /// The notify sweep: a point rushes the length of the head, blooming wider as it goes,
 /// then the bloom washes out. Reads as "scanned ... accepted" in one gesture.
@@ -51,10 +53,23 @@ constexpr float kNotifyFadeSec   = 0.75f;
 constexpr float kNotifySigmaFrom = 0.35f;  ///< A point, at the start.
 constexpr float kNotifySigmaTo   = 1.95f;  ///< Nearly the whole strip, by the end.
 
-/// Width of one pad's glow in axis units. 0.55 puts the neighbouring pad's LEDs at about
-/// a sixth brightness -- enough that a finger reads as a soft pool rather than three
-/// separate lamps, not so much that the whole head lights up for one fingertip.
-constexpr float kTouchSigma = 0.55f;
+/// Width of one pad's glow in axis units. LEDs sit 0.4 apart and the pads 1.0 apart, so
+/// 0.42 puts the next LED along at ~60% and the neighbouring PAD at ~4%: a pool about
+/// three LEDs wide that clearly peaks where the finger is. The old 0.55 spread each pad
+/// over half the head, and with three pads lit that left nowhere dark to contrast against.
+constexpr float kTouchSigma = 0.42f;
+
+/// Contrast curve on the raw pad reading before it becomes brightness.
+///
+/// The Si12T reports each pad as a 2-bit intensity, and a hand resting on the back of the
+/// head couples into all three -- the far pad reads 1 or 2 rather than 0. Fed in linearly
+/// that is 33-67% brightness at the far end of the head, which is why touching the back
+/// lit the front almost fully: the gaussian was never the problem, the input was.
+///
+/// Squaring-ish pulls the incidental levels down hard while leaving a real press at full:
+///   1/3 -> 0.17,  2/3 -> 0.52,  3/3 -> 1.00
+/// Raise it for a tighter, twitchier response; lower it toward 1.0 to go back to linear.
+constexpr float kTouchGamma = 1.7f;
 
 /// Fast in, slow out. The asymmetry is the whole effect: contact is instant, the
 /// afterglow trails the finger and fades over about a second.
@@ -242,7 +257,8 @@ void LedStage::update_touch(float dt)
 
     float pad[3];
     for (int p = 0; p < 3; p++) {
-        pad[p] = static_cast<float>((packed >> (p * 2)) & 0x03) / 3.0f;
+        const float raw = static_cast<float>((packed >> (p * 2)) & 0x03) / 3.0f;
+        pad[p]          = (raw > 0.0f) ? std::pow(raw, kTouchGamma) : 0.0f;
     }
 
     for (int i = 0; i < kLedCount; i++) {
