@@ -12,18 +12,27 @@ namespace stackchan::addon {
 inline constexpr int kLedCount    = 12;
 inline constexpr int kLedsPerSide = 6;
 
-/// Both strips are wired the same way round, so LED 0 and LED 6 are the same end of the
-/// head. Whether that end is the back or the front is the one thing here that cannot be
-/// read off the source -- flip this if the head-pet glow chases the finger backwards.
-/// Nothing else encodes the winding direction.
-inline constexpr bool kLedStripRunsBackToFront = true;
+/// The two strips are NOT wired the same way round, which is the sort of thing only the
+/// hardware can tell you: measured on the device, a back-to-front rub lit the left side
+/// correctly and the right side in reverse. So LED 0 and LED 6 are opposite ends of the
+/// head, and each strip carries its own winding flag.
+///
+/// "Left" and "right" are the robot's own, matching LeftNeonLight / RightNeonLight -- the
+/// right strip (indices 6-11) is the one on your left as you face the device.
+///
+/// These two booleans are the only place the winding is encoded; led_axis() is the only
+/// reader, so flipping one here flips every effect that has a direction.
+inline constexpr bool kLeftStripRunsBackToFront  = true;
+inline constexpr bool kRightStripRunsBackToFront = false;
 
 /// Where an LED sits along the head's back<->front axis: -1 at the back, +1 at the front.
 constexpr float led_axis(int index)
 {
     const float t = static_cast<float>(index % kLedsPerSide) / (kLedsPerSide - 1);  // 0..1
     const float u = t * 2.0f - 1.0f;
-    return kLedStripRunsBackToFront ? u : -u;
+    const bool back_to_front =
+        (index < kLedsPerSide) ? kLeftStripRunsBackToFront : kRightStripRunsBackToFront;
+    return back_to_front ? u : -u;
 }
 
 /// The three head-touch pads sit on the same axis, evenly spaced. Pad 0 is the low bit

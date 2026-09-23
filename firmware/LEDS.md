@@ -74,7 +74,8 @@ instead of the hardware, so every existing caller was a no-op change.
 
 ## 3. Geometry
 
-Twelve LEDs: **0–5 left side, 6–11 right side**, both strips wired the same way round.
+Twelve LEDs: **0–5 left side, 6–11 right side**, and the two strips are wired in
+*opposite* directions — LED 0 and LED 6 are at opposite ends of the head.
 `led_axis(i)` maps each to a position on the head's back↔front axis, −1 to +1.
 
 The head-touch sensor (Si12T, `hal_head_touch.cpp`) is three pads on that *same* axis —
@@ -82,16 +83,18 @@ which is exactly why a touch can be drawn on the lights at all. Pad 0 is the low
 of the sensor byte and the negative end of `get_position()`; the gesture recogniser calls
 movement toward pad 2 "forward".
 
-**The one thing the source cannot tell you** is whether LED index 0 is the front of the
-head or the back. That is a fact about how the strips were soldered. It is isolated to a
-single line:
+**Which end of a strip is the front** is a fact about how it was soldered, not something
+the source can derive. Measured on the device: the two sides disagree. Each strip
+therefore carries its own flag:
 
 ```cpp
-inline constexpr bool kLedStripRunsBackToFront = true;   // led_stage.h
+inline constexpr bool kLeftStripRunsBackToFront  = true;    // led_stage.h
+inline constexpr bool kRightStripRunsBackToFront = false;   // wired in reverse
 ```
 
-If stroking the head makes the glow chase the wrong way, flip it. Nothing else in the
-firmware encodes winding direction, so that is the whole fix.
+If stroking the head makes the glow chase the wrong way **on one side only**, flip that
+side's flag; if it runs backwards on both, flip both. `led_axis()` is the sole reader and
+nothing else in the firmware encodes winding direction, so that is the whole fix.
 
 ---
 

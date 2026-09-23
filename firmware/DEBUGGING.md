@@ -217,7 +217,7 @@ Each of these presented as something else entirely.
 | Client connected, device says `has_client:false` | Ghost socket. Something cleared bookkeeping without closing the TCP connection |
 | Nothing enumerates, no `Speed:` line in system_profiler | Bad USB cable. Try another before debugging anything else |
 | LED colour "wrong" | The twelve head LEDs are composited, not assigned — base (host/MCP) under a status wash under a head-touch glow. A colour that looks off is usually the status layer sitting on top of it, and it lifts by itself when the robot goes idle. See `LEDS.md` |
-| LED glow runs the wrong way when you stroke the head | The one thing `LEDS.md` cannot know without hardware: which end of each strip is the front. Flip `kLedStripRunsBackToFront` in `led_stage.h` |
+| LED glow runs the wrong way when you stroke the head | Winding direction, which only the hardware knows. The two strips are wired in opposite directions and each has its own flag in `led_stage.h` — flip `kLeftStripRunsBackToFront` or `kRightStripRunsBackToFront` for whichever side chases backwards |
 | Model says it cannot take photos | It is telling the truth about whatever tool set it was given — check the declarations, not the firmware |
 | Robot ignores taps, screen dead, LED green | Stuck in `listening`. State is driven by protocol messages, so a client can leave it there; the launcher gates the home indicator and status bar on `is_xiaozhi_idle()`, so the whole UI goes with it. `POST /debug/reset` |
 | A new on-screen widget kills taps or gestures | LVGL objects are **clickable by default**. Anything added to `lv_layer_top()` or over the avatar panel swallows input — `lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE)` |
